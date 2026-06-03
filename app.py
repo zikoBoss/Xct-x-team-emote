@@ -6,8 +6,8 @@ import json
 import os
 import ssl
 import logging
-import random
 from datetime import datetime
+from pathlib import Path
 from typing import List, Tuple
 
 import aiohttp
@@ -16,9 +16,6 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.client.default import DefaultBotProperties
-
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad, unpad
 
 from xC4 import (
     GenJoinSquadsPacket, Emote_k, ExiT, GeneRaTePk, CrEaTe_ProTo,
@@ -30,12 +27,18 @@ from Pb2 import MajoRLoGinrEq_pb2, MajoRLoGinrEs_pb2, PorTs_pb2
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# ================== بيانات الحساسة ==================
 BOT_TOKEN = "8798038134:AAEUlmP2_75Ps7rTe7WkdOElJXpqGt5Cy9c"
 FF_UID = "4812753412"
 FF_PASSWORD = "492C6754CD1BB892C11548121956ADF254468453FA0A7A25FA6367F9DF926221"
 WEB_PORT = int(os.environ.get("PORT", 8080))
-BASE_URL = os.environ.get("BASE_URL", "https://raw.githubusercontent.com/4737647734/Emote/main")
 
+# ================== المسارات المحلية ==================
+BASE_DIR = Path(__file__).parent
+ITEM_DATA_PATH = BASE_DIR / "itemData.json"
+EMOTE_IMAGE_DIR = BASE_DIR / "emote_image"
+
+# ================== متغيرات الاتصال ==================
 online_writer = None
 whisper_writer = None
 key = None
@@ -44,29 +47,29 @@ region = None
 is_logged_in = False
 login_lock = asyncio.Lock()
 
-ITEM_DATA_URL = f"{BASE_URL}/itemData.json"
+# ================== تحميل الإيموجيات من الملف المحلي ==================
 cached_emotes = []
 name_to_id = {}
 id_to_name = {}
 
-async def load_emotes():
+def load_emotes_from_local():
     global cached_emotes, name_to_id, id_to_name
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(ITEM_DATA_URL, timeout=10) as resp:
-                if resp.status == 200:
-                    cached_emotes = await resp.json()
-                    for item in cached_emotes:
-                        idd = item["Id"]
-                        name = item["name"].lower()
-                        name_to_id[name] = idd
-                        id_to_name[idd] = name
-                    logger.info(f"Loaded {len(cached_emotes)} emotes")
-                else:
-                    logger.error("Failed to fetch itemData.json")
+        if not ITEM_DATA_PATH.exists():
+            logger.error(f"itemData.json not found at {ITEM_DATA_PATH}")
+            return
+        with open(ITEM_DATA_PATH, "r", encoding="utf-8") as f:
+            cached_emotes = json.load(f)
+        for item in cached_emotes:
+            idd = item["Id"]
+            name = item["name"].lower()
+            name_to_id[name] = idd
+            id_to_name[idd] = name
+        logger.info(f"✅ Loaded {len(cached_emotes)} emotes from local file")
     except Exception as e:
-        logger.error(f"Error loading emotes: {e}")
+        logger.error(f"Error loading local emotes: {e}")
 
+# ================== دوال تسجيل الدخول (نفس الكود الأصلي) ==================
 async def GeNeRaTeAccEss(uid, password):
     url = "https://100067.connect.garena.com/oauth/guest/token/grant"
     headers = {
@@ -89,6 +92,8 @@ async def GeNeRaTeAccEss(uid, password):
             return data.get("open_id"), data.get("access_token")
 
 async def encrypted_proto(encoded_hex):
+    from Crypto.Cipher import AES
+    from Crypto.Util.Padding import pad
     cipher = AES.new(b'Yg&tc%DEuh6%Zc^8', AES.MODE_CBC, b'6oyZDr22E3ychjM%')
     return cipher.encrypt(pad(encoded_hex, AES.block_size))
 
@@ -224,8 +229,7 @@ async def run_tcp_online(ip, port, auth_token):
                 data = await reader.read(4096)
                 if not data:
                     break
-        except Exception as e:
-            logger.error(f"TCP Online error: {e}")
+        except:
             await asyncio.sleep(5)
             online_writer = None
 
@@ -242,8 +246,7 @@ async def run_tcp_chat(ip, port, auth_token, ready, region):
                 data = await reader.read(4096)
                 if not data:
                     break
-        except Exception as e:
-            logger.error(f"TCP Chat error: {e}")
+        except:
             await asyncio.sleep(5)
             whisper_writer = None
 
@@ -252,9 +255,6 @@ async def SEndPacKeT(typE, packet):
     if typE == 'OnLine' and online_writer:
         online_writer.write(packet)
         await online_writer.drain()
-    elif typE == 'Whisper' and whisper_writer:
-        whisper_writer.write(packet)
-        await whisper_writer.drain()
 
 async def login_to_freefire():
     global key, iv, region, online_writer, whisper_writer, is_logged_in
@@ -294,7 +294,7 @@ async def login_to_freefire():
             asyncio.create_task(run_tcp_online(online_ip, int(online_port), auth_token))
             await asyncio.wait_for(ready.wait(), timeout=15)
             is_logged_in = True
-            logger.info("Logged into Free Fire successfully")
+            logger.info("✅ Logged into Free Fire")
             return True
         except Exception as e:
             logger.error(f"Login error: {e}")
@@ -334,6 +334,7 @@ async def keep_alive():
             logger.warning("Connection lost, reconnecting...")
             await login_to_freefire()
 
+# ================== واجهة الموقع ==================
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -535,7 +536,7 @@ HTML_PAGE = """<!DOCTYPE html>
             showToast(`✅ تم تحميل ${allItems.length} إيموجي`);
         } catch(e) {
             console.error(e);
-            document.getElementById('itemsGrid').innerHTML = `<div style="text-align:center; padding:40px;">❌ فشل تحميل البيانات<br>${e.message}<br>تأكد من اتصال الخادم بـ GitHub</div>`;
+            document.getElementById('itemsGrid').innerHTML = `<div style="text-align:center; padding:40px;">❌ فشل تحميل البيانات<br>${e.message}</div>`;
         }
     }
 
@@ -591,7 +592,7 @@ HTML_PAGE = """<!DOCTYPE html>
         pageItems.forEach(item => {
             const card = document.createElement('div');
             card.className = 'card';
-            const imgSrc = `https://raw.githubusercontent.com/4737647734/Emote/main/emote_image/${item.Id}.png`;
+            const imgSrc = `/emote_image/${item.Id}.png`;
             card.innerHTML = `<img src="${imgSrc}" onerror="this.src='https://via.placeholder.com/80?text=?'"><div class="tooltip">${item.Id}<br>${item.name}</div>`;
             card.onclick = () => sendEmote(item);
             grid.appendChild(card);
@@ -655,11 +656,26 @@ HTML_PAGE = """<!DOCTYPE html>
 </html>
 """
 
+# ================== دوال خادم الويب ==================
 async def handle_root(request):
     return web.Response(text=HTML_PAGE, content_type='text/html')
 
 async def handle_item_data(request):
     return web.json_response(cached_emotes)
+
+async def handle_emote_image(request):
+    """خدمة الصور من المجلد المحلي"""
+    image_name = request.match_info.get('id', '')
+    if not image_name:
+        return web.Response(status=404)
+    image_path = EMOTE_IMAGE_DIR / f"{image_name}.png"
+    if not image_path.exists():
+        return web.Response(status=404)
+    try:
+        with open(image_path, 'rb') as f:
+            return web.Response(body=f.read(), content_type='image/png')
+    except Exception:
+        return web.Response(status=500)
 
 async def handle_send_emote(request):
     try:
@@ -675,6 +691,7 @@ async def handle_send_emote(request):
         logger.error(f"Error in handle_send_emote: {e}")
         return web.json_response({"success": False, "message": str(e)})
 
+# ================== بوت التلغرام ==================
 dp = Dispatcher()
 
 @dp.message(Command("start"))
@@ -711,8 +728,11 @@ async def dance_handler(message: Message):
     success, result = await cmd_dance(team, uids, emote_id)
     await msg.edit_text(f"{'✅' if success else '❌'} {result}")
 
+# ================== التشغيل الرئيسي ==================
 async def main():
-    await load_emotes()
+    load_emotes_from_local()
+    if not cached_emotes:
+        logger.warning("No emotes loaded. Check itemData.json")
     if not await login_to_freefire():
         logger.warning("Initial login failed, will retry...")
         asyncio.create_task(keep_alive())
@@ -726,12 +746,14 @@ async def main():
     app = web.Application()
     app.router.add_get("/", handle_root)
     app.router.add_get("/itemData.json", handle_item_data)
+    app.router.add_get("/emote_image/{id}.png", handle_emote_image)
     app.router.add_post("/send_emote", handle_send_emote)
+
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WEB_PORT)
     await site.start()
-    logger.info(f"Server running on port {WEB_PORT}")
+    logger.info(f"🚀 Server running on port {WEB_PORT}")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
