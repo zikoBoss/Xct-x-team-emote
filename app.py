@@ -9,12 +9,12 @@ import ssl
 import logging
 import urllib.request
 from datetime import datetime
-from pathlib import Path
-
-import aiohttp
 from aiohttp import web
+import aiohttp
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+from aiogram.types import Message
 from aiogram.client.default import DefaultBotProperties
 
 from xC4 import (
@@ -26,15 +26,13 @@ from Pb2 import MajoRLoGinrEq_pb2, MajoRLoGinrEs_pb2, PorTs_pb2
 
 logging.basicConfig(level=logging.INFO)
 
+# ================== بيانات الحساسة (ضعها هنا للتجربة) ==================
 BOT_TOKEN = "8798038134:AAEUlmP2_75Ps7rTe7WkdOElJXpqGt5Cy9c"
 FF_UID = "4812753412"
 FF_PASSWORD = "492C6754CD1BB892C11548121956ADF254468453FA0A7A25FA6367F9DF926221"
 WEB_PORT = int(os.environ.get("PORT", 8080))
 
-if not BOT_TOKEN or not FF_UID or not FF_PASSWORD:
-    logging.error("Missing BOT_TOKEN, FF_UID or FF_PASSWORD")
-    sys.exit(1)
-
+# ================== متغيرات الاتصال ==================
 online_writer = None
 whisper_writer = None
 key = None
@@ -43,26 +41,31 @@ region = None
 is_logged_in = False
 login_lock = asyncio.Lock()
 
+# ================== تحميل الإيموجيات من itemData.json ==================
 ITEM_DATA_URL = "https://raw.githubusercontent.com/4737647734/Emote/main/itemData.json"
-NAME_TO_ID = {}
-ID_TO_NAME = {}
+ALL_EMOTE = {}  # {id: name} أو العكس؟ سنبني خريطة رقم الرقصة (المستخدم) -> id
+# في الموقع سنستخدم id مباشرة، وللبوت سنسمح باستخدام id أو الاسم.
 
-def load_emotes():
-    global NAME_TO_ID, ID_TO_NAME
+# تحميل البيانات
+async def load_emotes():
+    global ALL_EMOTE
     try:
-        with urllib.request.urlopen(ITEM_DATA_URL, timeout=10) as f:
-            data = json.load(f)
-        for item in data:
-            idd = item["Id"]
-            name = item["name"].lower()
-            NAME_TO_ID[name] = idd
-            ID_TO_NAME[idd] = name
-        logging.info(f"Loaded {len(data)} emotes")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(ITEM_DATA_URL) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    # نبني قاموس {id: name} وللبوت سنبني أيضاً من الاسم إلى id
+                    name_to_id = {}
+                    for item in data:
+                        name_to_id[item["name"].lower()] = item["Id"]
+                    ALL_EMOTE = name_to_id
+                    logging.info(f"Loaded {len(data)} emotes")
+                else:
+                    logging.error("Failed to load itemData.json")
     except Exception as e:
-        logging.error(f"Failed to load emotes: {e}")
+        logging.error(f"Error loading emotes: {e}")
 
-load_emotes()
-
+# ================== دوال تسجيل الدخول (من الكود الأصلي) ==================
 async def GeNeRaTeAccEss(uid, password):
     url = "https://100067.connect.garena.com/oauth/guest/token/grant"
     headers = {
@@ -79,10 +82,9 @@ async def GeNeRaTeAccEss(uid, password):
     }
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, data=data) as resp:
-            if resp.status != 200:
-                return None, None
+            if resp.status != 200: return None, None
             data = await resp.json()
-            return data.get("open_id"), data.get("access_token")
+            return (data.get("open_id"), data.get("access_token"))
 
 async def encrypted_proto(encoded_hex):
     from Crypto.Cipher import AES
@@ -220,9 +222,8 @@ async def run_tcp_online(ip, port, auth_token):
             await writer.drain()
             while True:
                 data = await reader.read(4096)
-                if not data:
-                    break
-        except Exception:
+                if not data: break
+        except:
             await asyncio.sleep(5)
             online_writer = None
 
@@ -237,9 +238,8 @@ async def run_tcp_chat(ip, port, auth_token, ready, region):
             ready.set()
             while True:
                 data = await reader.read(4096)
-                if not data:
-                    break
-        except Exception:
+                if not data: break
+        except:
             await asyncio.sleep(5)
             whisper_writer = None
 
@@ -247,23 +247,16 @@ async def SEndPacKeT(whisper_writer, online_writer, typE, packet):
     if typE == 'OnLine' and online_writer:
         online_writer.write(packet)
         await online_writer.drain()
-    elif typE == 'Whisper' and whisper_writer:
-        whisper_writer.write(packet)
-        await whisper_writer.drain()
 
 async def login_to_freefire():
     global key, iv, region, online_writer, whisper_writer, is_logged_in
     async with login_lock:
         try:
             open_id, access_token = await GeNeRaTeAccEss(FF_UID, FF_PASSWORD)
-            if not open_id:
-                logging.error("Failed to get open_id")
-                return False
+            if not open_id: return False
             payload = await EncRypTMajoRLoGin(open_id, access_token)
             response = await MajorLogin(payload)
-            if not response:
-                logging.error("MajorLogin failed")
-                return False
+            if not response: return False
             login_res = await DecRypTMajoRLoGin(response)
             url = login_res.url
             region = login_res.region
@@ -274,9 +267,7 @@ async def login_to_freefire():
             timestamp = login_res.timestamp
 
             login_data = await GetLoginData(url, payload, token)
-            if not login_data:
-                logging.error("GetLoginData failed")
-                return False
+            if not login_data: return False
             login_dec = await DecRypTLoGinDaTa(login_data)
 
             online_ip, online_port = login_dec.Online_IP_Port.split(":")
@@ -288,10 +279,10 @@ async def login_to_freefire():
             asyncio.create_task(run_tcp_online(online_ip, int(online_port), auth_token))
             await asyncio.wait_for(ready.wait(), timeout=15)
             is_logged_in = True
-            logging.info("Logged into Free Fire")
+            logging.info("✅ Logged into Free Fire")
             return True
         except Exception as e:
-            logging.error(f"Login error: {e}")
+            logging.error(f"Login failed: {e}")
             is_logged_in = False
             return False
 
@@ -321,6 +312,7 @@ async def periodic_relogin():
         logging.info("Periodic re-login...")
         await login_to_freefire()
 
+# ================== واجهة الموقع المدمجة (HTML/CSS/JS) ==================
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -330,274 +322,155 @@ HTML_PAGE = """<!DOCTYPE html>
 <style>
 :root {
   --primary: #ffffff;
-  --primary-dark: #cccccc;
-  --primary-light: #eeeeee;
-  --primary-glow: rgba(255, 255, 255, 0.25);
   --bg-dark: #000000;
-  --bg-dark-secondary: #0a0a0a;
   --bg-card: #111111;
   --bg-card-hover: #1c1c1c;
   --text-light: #f5f5f5;
   --text-muted: #999999;
-  --text-muted-light: #777777;
-  --accent: #ffffff;
-  --accent-light: #dddddd;
-  --success: #4caf50;
-  --error: #f44336;
   --border-radius: 16px;
-  --transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  --transition-smooth: all 0.6s cubic-bezier(0.4, 0, 0.2, 1);
-  --shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
-  --shadow-hover: 0 16px 48px rgba(0, 0, 0, 0.8);
-  --glow: 0 0 30px rgba(255, 255, 255, 0.15);
-  --glass-bg: rgba(15, 15, 15, 0.85);
-  --glass-border: rgba(255, 255, 255, 0.1);
+  --transition: all 0.3s ease;
+  --glass-bg: rgba(15,15,15,0.85);
+  --glass-border: rgba(255,255,255,0.1);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-family: 'Segoe UI', system-ui, sans-serif;
   background: var(--bg-dark);
   color: var(--text-light);
-  overflow-x: hidden;
-  min-height: 100vh;
+  direction: rtl;
 }
-body::before {
-  content: '';
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: radial-gradient(circle at 20% 20%, rgba(255,255,255,0.04) 0%, transparent 50%), radial-gradient(circle at 80% 80%, rgba(255,255,255,0.04) 0%, transparent 50%);
-  z-index: -2;
-  animation: backgroundFloat 30s ease-in-out infinite alternate;
-}
-body::after {
-  content: '';
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(45deg, transparent 0%, rgba(255,255,255,0.02) 50%, transparent 100%);
-  z-index: -1;
-  animation: gradientShift 20s linear infinite;
-}
-@keyframes backgroundFloat { 0%,100% { transform: translate(0,0) scale(1); } 33% { transform: translate(-1%,1.5%) scale(1.01); } 66% { transform: translate(1.5%,-1%) scale(0.99); } }
-@keyframes gradientShift { 0% { transform: translateX(0) translateY(0); } 100% { transform: translateX(100%) translateY(100%); } }
 header {
   background: var(--glass-bg);
-  backdrop-filter: blur(24px) saturate(180%);
-  padding: 16px 32px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  backdrop-filter: blur(12px);
+  padding: 16px 20px;
   position: sticky;
   top: 0;
-  z-index: 1000;
-  box-shadow: var(--shadow);
+  z-index: 100;
   border-bottom: 1px solid var(--glass-border);
-  transition: var(--transition-smooth);
-  animation: slideDown 0.8s cubic-bezier(0.4,0,0.2,1) both;
 }
-@keyframes slideDown { from { opacity:0; transform:translateY(-30px); } to { opacity:1; transform:translateY(0); } }
 .header-left h1 {
   font-size: 24px;
-  font-weight: 700;
-  background: linear-gradient(135deg, #ffffff, #888888);
+  background: linear-gradient(135deg, #fff, #888);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
-  letter-spacing: -0.5px;
 }
-.dropdown { position: relative; }
-.dropdown button {
-  background: linear-gradient(135deg, #ffffff, #cccccc);
-  color: white;
-  border: none;
-  border-radius: var(--border-radius);
-  padding: 10px 20px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 600;
-  transition: var(--transition-smooth);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  box-shadow: var(--shadow);
-  position: relative;
-  overflow: hidden;
-}
-.dropdown button:hover { transform: translateY(-2px); box-shadow: var(--shadow-hover), var(--glow); }
-.dropdown-content {
-  display: none;
-  position: absolute;
-  right: 0;
-  top: 100%;
-  margin-top: 10px;
-  background: var(--glass-bg);
-  backdrop-filter: blur(24px);
-  min-width: 160px;
-  max-height: 350px;
-  overflow-y: auto;
-  border-radius: var(--border-radius);
-  box-shadow: var(--shadow-hover);
-  border: 1px solid var(--glass-border);
-  z-index: 1001;
-}
-.dropdown-content button {
-  background: transparent;
-  color: var(--text-light);
-  border: none;
-  padding: 14px 20px;
-  text-align: left;
-  width: 100%;
-  cursor: pointer;
-  border-radius: 0;
-  box-shadow: none;
-  font-weight: 500;
-  justify-content: flex-start;
-}
-.dropdown-content button:hover { background-color: rgba(255,255,255,0.04); padding-left: 24px; }
-.container { padding: 32px; max-width: 1600px; margin: 0 auto; animation: fadeIn 0.8s ease-out 0.2s both; }
-@keyframes fadeIn { from { opacity:0; transform:translateY(24px); } to { opacity:1; transform:translateY(0); } }
 .input-panel {
-  background: var(--glass-bg);
-  backdrop-filter: blur(12px);
-  border-radius: var(--border-radius);
-  padding: 20px;
-  margin-bottom: 30px;
-  border: 1px solid var(--glass-border);
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
-  align-items: flex-start;
+  gap: 12px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(8px);
+  padding: 20px;
+  margin: 20px;
+  border-radius: var(--border-radius);
+  border: 1px solid var(--glass-border);
   justify-content: center;
 }
 .input-group {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
   flex: 1;
   min-width: 150px;
 }
 .input-group label {
   font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 1px;
   color: var(--text-muted);
+  display: block;
+  margin-bottom: 6px;
 }
 .input-group input, .uid-input {
+  width: 100%;
   background: rgba(0,0,0,0.6);
   border: 1px solid var(--glass-border);
+  padding: 10px 12px;
   border-radius: 12px;
-  padding: 12px 16px;
   color: white;
   font-size: 14px;
-  transition: var(--transition);
 }
-.input-group input:focus, .uid-input:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 15px rgba(255,255,255,0.1); }
 .uids-container {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
-  flex: 2;
 }
-.uid-input { flex: 1; min-width: 120px; }
+.uid-input { flex: 1; min-width: 100px; }
 .add-uid-btn {
-  background: linear-gradient(135deg, #ffffff, #888888);
+  background: linear-gradient(135deg, #fff, #888);
   border: none;
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   border-radius: 12px;
-  font-size: 24px;
+  font-size: 22px;
   cursor: pointer;
-  transition: var(--transition);
-  color: black;
   font-weight: bold;
+  color: black;
 }
-.add-uid-btn:hover { transform: scale(1.05); }
-.filters { display: flex; justify-content: center; margin-bottom: 36px; }
+.filters { text-align: center; margin: 20px; }
 .filters input {
-  width: 90%;
-  max-width: 600px;
-  padding: 18px 24px;
-  border-radius: var(--border-radius);
-  border: 2px solid var(--glass-border);
+  width: 80%;
+  max-width: 500px;
+  padding: 12px 20px;
   background: var(--glass-bg);
-  backdrop-filter: blur(12px);
-  color: var(--text-light);
-  outline: none;
+  border: 1px solid var(--glass-border);
+  border-radius: 40px;
+  color: white;
   font-size: 16px;
-  transition: var(--transition-smooth);
-  box-shadow: var(--shadow);
 }
-.filters input:focus { border-color: var(--primary); box-shadow: var(--glow), var(--shadow); transform: translateY(-2px); }
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-  gap: 24px;
-  max-height: calc(100vh - 280px);
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 16px;
+  padding: 0 20px 40px;
+  max-height: 60vh;
   overflow-y: auto;
-  padding: 16px 8px 32px 0;
 }
-.grid::-webkit-scrollbar { width: 10px; }
-.grid::-webkit-scrollbar-track { background: rgba(255,255,255,0.03); border-radius: 10px; }
-.grid::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #ffffff, #888888); border-radius: 10px; }
 .card {
   background: var(--bg-card);
-  border-radius: var(--border-radius);
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  transition: var(--transition-smooth);
+  border-radius: 16px;
+  padding: 12px;
+  text-align: center;
   cursor: pointer;
-  position: relative;
-  overflow: hidden;
-  box-shadow: var(--shadow);
+  transition: var(--transition);
   border: 1px solid var(--glass-border);
 }
-.card:hover {
-  background: var(--bg-card-hover);
-  transform: translateY(-8px) scale(1.02);
-  box-shadow: var(--shadow-hover), var(--glow);
-}
+.card:hover { background: var(--bg-card-hover); transform: translateY(-5px); }
 .card img {
-  max-width: 90%;
-  max-height: 140px;
-  object-fit: contain;
+  max-width: 80px;
+  height: auto;
   border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-  transition: var(--transition-smooth);
 }
-.card:hover img { transform: scale(1.08) rotate(1deg); }
-.tooltip { font-size: 13px; color: var(--text-muted); margin-top: 14px; font-weight: 600; text-align: center; word-break: break-all; }
-.pagination { display: flex; justify-content: center; margin-top: 40px; gap: 8px; }
+.tooltip { font-size: 12px; color: var(--text-muted); margin-top: 8px; word-break: break-all; }
+.pagination {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin: 20px;
+}
 .pagination button {
   background: var(--glass-bg);
-  backdrop-filter: blur(12px);
-  color: var(--text-light);
-  border: none;
-  padding: 12px 20px;
-  border-radius: var(--border-radius);
-  cursor: pointer;
-  transition: var(--transition-smooth);
-  font-weight: 600;
-  min-width: 48px;
-  height: 48px;
-  box-shadow: var(--shadow);
   border: 1px solid var(--glass-border);
-}
-.pagination button.active {
-  background: linear-gradient(135deg, #ffffff, #888888);
+  padding: 8px 14px;
+  border-radius: 12px;
   color: white;
-  box-shadow: var(--glow), var(--shadow);
-  transform: scale(1.05);
+  cursor: pointer;
 }
-.pagination button:hover:not(.active) { background: rgba(255,255,255,0.05); transform: translateY(-2px); }
-.pagination button:disabled { opacity: 0.3; cursor: not-allowed; }
+.pagination button.active { background: linear-gradient(135deg, #fff, #888); color: black; }
+footer { text-align: center; padding: 20px; border-top: 1px solid var(--glass-border); color: gray; font-size: 13px; }
+footer a { color: #fff; text-decoration: none; }
+.toast {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #222;
+  color: white;
+  padding: 10px 20px;
+  border-radius: 40px;
+  z-index: 2000;
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+.toast.success { background: #2e7d32; }
+.toast.error { background: #c62828; }
 .modal {
   display: none;
   position: fixed;
@@ -605,297 +478,205 @@ header {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0,0,0,0.92);
+  background: rgba(0,0,0,0.9);
+  backdrop-filter: blur(12px);
   justify-content: center;
   align-items: center;
-  z-index: 2000;
-  backdrop-filter: blur(12px);
+  z-index: 3000;
 }
 .modal-content {
-  background: var(--bg-card);
-  padding: 40px;
-  border-radius: var(--border-radius);
-  max-width: 550px;
-  width: 95%;
+  background: #111;
+  padding: 20px;
+  border-radius: 24px;
   text-align: center;
-  position: relative;
-  box-shadow: var(--shadow-hover);
-  border: 1px solid var(--glass-border);
-  max-height: 90vh;
-  overflow-y: auto;
+  max-width: 300px;
+  width: 90%;
 }
-.modal-content img { max-width: 100%; max-height: 320px; object-fit: contain; border-radius: 20px; margin-bottom: 24px; }
+.modal-content img { max-width: 150px; margin-bottom: 10px; }
 .close {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  color: white;
-  font-size: 32px;
+  float: right;
+  font-size: 28px;
   cursor: pointer;
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 50%;
-  background: rgba(255,255,255,0.1);
-  backdrop-filter: blur(12px);
 }
-.close:hover { background: rgba(255,255,255,0.2); transform: rotate(90deg) scale(1.1); }
-#modalName { font-size: 32px; margin: 0 0 12px; background: linear-gradient(135deg, #ffffff, #888888); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-#modalId { font-size: 18px; margin: 0 0 30px; color: var(--text-muted); padding: 8px 16px; background: rgba(255,255,255,0.05); border-radius: 50px; display: inline-block; }
-.toast {
-  position: fixed;
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: rgba(0,0,0,0.9);
-  backdrop-filter: blur(20px);
-  color: white;
-  padding: 12px 24px;
-  border-radius: 40px;
-  z-index: 2001;
-  font-size: 14px;
-  pointer-events: none;
-  transition: opacity 0.3s;
-  opacity: 0;
-  border: 1px solid rgba(255,255,255,0.2);
-}
-.toast.success { background: #2e7d32; }
-.toast.error { background: #c62828; }
-footer { text-align: center; padding: 30px 20px; color: var(--text-muted); font-size: 13px; border-top: 1px solid var(--glass-border); margin-top: 40px; }
-footer a { color: var(--primary-light); text-decoration: none; }
-footer a:hover { text-decoration: underline; }
-@media (max-width: 768px) { .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); } .input-panel { flex-direction: column; } }
 </style>
 </head>
 <body>
-<header>
-  <div class="header-left"><h1>𝕏𝕔𝕋𝕩𝕋𝕖𝕒𝕄 𝔼𝕖𝕄𝕠𝕋</h1></div>
-  <div class="header-right">
-    <div class="dropdown">
-      <button onclick="toggleDropdown()"><span id="dropdownText">OB Update</span> <span id="dropdownArrow">▼</span></button>
-      <div id="obDropdown" class="dropdown-content"></div>
-    </div>
-  </div>
-</header>
+<header><div class="header-left"><h1>𝕏𝕔𝕋𝕩𝕋𝕖𝕒𝕄 𝔼𝕖𝕄𝕠𝕋</h1></div></header>
 
-<div class="container">
-  <div class="input-panel">
-    <div class="input-group">
-      <label>🏷️ Team Code</label>
-      <input type="text" id="teamCode" placeholder="مثال: ABC123">
-    </div>
-    <div class="input-group" style="flex:2">
-      <label>👥 Player UIDs</label>
-      <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
-        <div id="uidsContainer" style="display: flex; gap: 8px; flex-wrap: wrap; flex:1">
-          <input type="text" class="uid-input" placeholder="UID">
-        </div>
-        <button class="add-uid-btn" id="addUidBtn">+</button>
+<div class="input-panel">
+  <div class="input-group">
+    <label>🏷️ Team Code</label>
+    <input type="text" id="teamCode" placeholder="مثال: ABC123">
+  </div>
+  <div class="input-group" style="flex:2">
+    <label>👥 Player UIDs</label>
+    <div style="display:flex; gap:8px; align-items:center;">
+      <div id="uidsContainer" style="display:flex; gap:8px; flex-wrap:wrap; flex:1">
+        <input type="text" class="uid-input" placeholder="UID">
       </div>
+      <button class="add-uid-btn" id="addUidBtn">+</button>
     </div>
   </div>
-
-  <div class="filters">
-    <input type="text" id="searchBox" placeholder="بحث بالاسم أو المعرف (مثال: 909042007)">
-  </div>
-  <div id="itemsGrid" class="grid">جاري التحميل...</div>
-  <div class="pagination" id="pagination"></div>
 </div>
 
-<footer>
-  <p>XcTxTeaM EeMoT | Developed by <a href="https://t.me/ZikoB0SS" target="_blank">@ZikoB0SS</a></p>
-</footer>
+<div class="filters"><input type="text" id="searchBox" placeholder="🔍 بحث بالاسم أو المعرف"></div>
+<div id="itemsGrid" class="grid">جاري التحميل...</div>
+<div class="pagination" id="pagination"></div>
+<footer>XcTxTeaM EeMoT | Developed by <a href="https://t.me/ZikoB0SS" target="_blank">@ZikoB0SS</a></footer>
 
-<div id="itemModal" class="modal"><div class="modal-content"><span class="close">&times;</span><img id="modalIcon" alt="Emote Preview"><h2 id="modalName"></h2><p id="modalId"></p></div></div>
+<div id="itemModal" class="modal"><div class="modal-content"><span class="close">&times;</span><img id="modalIcon"><h3 id="modalName"></h3><p id="modalId"></p></div></div>
 
 <script>
 const API_URL = "/send_emote";
 const ITEM_DATA_URL = "/itemData.json";
-const FALLBACK_IMG = "https://via.placeholder.com/100/333333/FFFFFF?text=No+Image";
-
-let allItems = [], selectedOB = "all", currentPage = 1, itemsPerPage = 30;
-let ID_TO_NAME = {};
+let allItems = [], currentPage = 1, itemsPerPage = 30, filteredItems = [];
 
 async function fetchData() {
   try {
     const res = await fetch(ITEM_DATA_URL);
     allItems = await res.json();
-    allItems.forEach(item => { ID_TO_NAME[item.Id] = item.name; });
-    createOBDropdown();
+    filteredItems = [...allItems];
     renderItems();
-  } catch(e) { console.error(e); document.getElementById("itemsGrid").innerHTML = "<div>خطأ في تحميل البيانات</div>"; }
+    createOBFilter();
+  } catch(e) { console.error(e); }
 }
 
-function createOBDropdown() {
-  const dropdown = document.getElementById("obDropdown");
-  dropdown.innerHTML = '<button onclick="selectOB(\'all\')">All Updates</button>';
+function createOBFilter() {
   const versions = new Set();
   allItems.forEach(item => {
     let idStr = item.Id.toString();
-    if(idStr.length >= 6) versions.add("OB"+idStr.substring(4,6));
+    if(idStr.length>=6) versions.add("OB"+idStr.substring(4,6));
   });
-  [...versions].sort((a,b)=>parseInt(b.slice(2))-parseInt(a.slice(2))).forEach(v => {
-    let btn = document.createElement("button");
-    btn.textContent = v; btn.onclick = () => selectOB(v);
-    dropdown.appendChild(btn);
+  const sorted = [...versions].sort((a,b)=>parseInt(b.slice(2))-parseInt(a.slice(2)));
+  const header = document.querySelector('header');
+  const filterDiv = document.createElement('div');
+  filterDiv.style.display = 'flex';
+  filterDiv.style.gap = '8px';
+  filterDiv.style.flexWrap = 'wrap';
+  filterDiv.style.marginTop = '10px';
+  filterDiv.style.justifyContent = 'center';
+  const allBtn = document.createElement('button');
+  allBtn.innerText = 'الكل';
+  allBtn.style.background = '#333';
+  allBtn.style.border = 'none';
+  allBtn.style.color = 'white';
+  allBtn.style.padding = '6px 12px';
+  allBtn.style.borderRadius = '20px';
+  allBtn.style.cursor = 'pointer';
+  allBtn.onclick = () => { filteredItems = [...allItems]; currentPage=1; renderItems(); };
+  filterDiv.appendChild(allBtn);
+  sorted.forEach(ob => {
+    const btn = document.createElement('button');
+    btn.innerText = ob;
+    btn.style.background = '#333';
+    btn.style.border = 'none';
+    btn.style.color = 'white';
+    btn.style.padding = '6px 12px';
+    btn.style.borderRadius = '20px';
+    btn.style.cursor = 'pointer';
+    btn.onclick = () => {
+      const code = ob.slice(2);
+      filteredItems = allItems.filter(item => item.Id.toString().startsWith("9090"+code));
+      currentPage = 1;
+      renderItems();
+    };
+    filterDiv.appendChild(btn);
   });
-}
-
-function toggleDropdown() {
-  let d = document.getElementById("obDropdown");
-  d.style.display = d.style.display === "block" ? "none" : "block";
-}
-
-function selectOB(ob) {
-  selectedOB = ob;
-  document.getElementById("dropdownText").innerText = ob === "all" ? "OB Update" : ob;
-  currentPage = 1;
-  renderItems();
-  document.getElementById("obDropdown").style.display = "none";
-}
-
-function applyFilters() {
-  let search = document.getElementById("searchBox").value.toLowerCase().trim();
-  let obCode = selectedOB !== "all" ? selectedOB.slice(2) : null;
-  return allItems.filter(item => {
-    let idStr = item.Id.toString();
-    let matchOB = obCode ? idStr.startsWith("9090"+obCode) : true;
-    let matchSearch = !search || item.name.toLowerCase().includes(search) || idStr.includes(search);
-    return matchOB && matchSearch;
-  });
+  header.appendChild(filterDiv);
 }
 
 function renderItems() {
-  const filtered = applyFilters();
-  const grid = document.getElementById("itemsGrid");
-  if(filtered.length === 0) {
-    grid.innerHTML = "<div style='text-align:center; padding:50px;'>لا توجد إيموجيات</div>";
-    updatePagination(0);
-    return;
-  }
+  const searchTerm = document.getElementById('searchBox').value.toLowerCase();
+  let data = filteredItems.filter(item => item.name.toLowerCase().includes(searchTerm) || item.Id.toString().includes(searchTerm));
+  const grid = document.getElementById('itemsGrid');
+  if(data.length===0){ grid.innerHTML='<div>لا توجد نتائج</div>'; updatePagination(0); return; }
   const start = (currentPage-1)*itemsPerPage;
-  const pageItems = filtered.slice(start, start+itemsPerPage);
-  grid.innerHTML = "";
-  pageItems.forEach((item, idx) => {
-    const card = document.createElement("div");
-    card.className = "card";
-    card.style.animationDelay = `${idx*0.05}s`;
-    const imgUrl = `/emote_image/${item.Id}.png`;
-    card.innerHTML = `<img src="${imgUrl}" onerror="this.src='${FALLBACK_IMG}'" alt="${item.name}" loading="lazy"><div class="tooltip">${item.Id}</div>`;
+  const pageItems = data.slice(start, start+itemsPerPage);
+  grid.innerHTML = '';
+  pageItems.forEach(item => {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<img src="https://raw.githubusercontent.com/4737647734/Emote/main/emote_image/${item.Id}.png" onerror="this.src='https://via.placeholder.com/80'"><div class="tooltip">${item.Id}</div>`;
     card.onclick = () => sendEmote(item);
     grid.appendChild(card);
   });
-  updatePagination(filtered.length);
+  updatePagination(data.length);
 }
 
 function updatePagination(total) {
-  const totalPages = Math.ceil(total / itemsPerPage);
-  const pagDiv = document.getElementById("pagination");
-  if(totalPages <= 1) { pagDiv.innerHTML = ""; return; }
-  pagDiv.innerHTML = "";
-  const prevBtn = document.createElement("button");
-  prevBtn.innerHTML = "◀";
-  prevBtn.disabled = currentPage === 1;
-  prevBtn.onclick = () => { if(currentPage > 1) { currentPage--; renderItems(); window.scrollTo({top:0}); } };
-  pagDiv.appendChild(prevBtn);
-  let startPage = Math.max(1, currentPage-2);
-  let endPage = Math.min(totalPages, startPage+4);
-  for(let i=startPage; i<=endPage; i++) {
-    const btn = document.createElement("button");
-    btn.textContent = i;
-    if(i === currentPage) btn.classList.add("active");
-    btn.onclick = () => { currentPage = i; renderItems(); window.scrollTo({top:0}); };
+  const totalPages = Math.ceil(total/itemsPerPage);
+  const pagDiv = document.getElementById('pagination');
+  if(totalPages<=1){ pagDiv.innerHTML=''; return; }
+  pagDiv.innerHTML = '';
+  for(let i=1;i<=Math.min(totalPages,5);i++){
+    const btn = document.createElement('button');
+    btn.innerText = i;
+    if(i===currentPage) btn.classList.add('active');
+    btn.onclick = () => { currentPage=i; renderItems(); };
     pagDiv.appendChild(btn);
   }
-  const nextBtn = document.createElement("button");
-  nextBtn.innerHTML = "▶";
-  nextBtn.disabled = currentPage === totalPages;
-  nextBtn.onclick = () => { if(currentPage < totalPages) { currentPage++; renderItems(); window.scrollTo({top:0}); } };
-  pagDiv.appendChild(nextBtn);
 }
 
-function showToast(msg, isError=false) {
-  const toast = document.createElement("div");
-  toast.className = `toast ${isError ? "error" : "success"}`;
+function showToast(msg, isError=false){
+  const toast = document.createElement('div');
+  toast.className = `toast ${isError?'error':'success'}`;
   toast.innerText = msg;
   document.body.appendChild(toast);
-  setTimeout(() => toast.style.opacity = "1", 10);
-  setTimeout(() => { toast.style.opacity = "0"; setTimeout(()=>toast.remove(),300); }, 3000);
+  setTimeout(()=>toast.style.opacity='1',10);
+  setTimeout(()=>{toast.style.opacity='0'; setTimeout(()=>toast.remove(),300);},3000);
 }
 
-async function sendEmote(item) {
-  const teamCode = document.getElementById("teamCode").value.trim();
-  const uidInputs = document.querySelectorAll(".uid-input");
-  const uids = Array.from(uidInputs).map(inp => inp.value.trim()).filter(v => v && /^\d+$/.test(v));
-  if(!teamCode) { showToast("❌ أدخل كود الفريق", true); return; }
-  if(uids.length === 0) { showToast("❌ أضف UID واحد على الأقل", true); return; }
+async function sendEmote(item){
+  const teamCode = document.getElementById('teamCode').value.trim();
+  const uids = Array.from(document.querySelectorAll('.uid-input')).map(inp=>inp.value.trim()).filter(v=>v && /^\d+$/.test(v));
+  if(!teamCode){ showToast('❌ أدخل كود الفريق', true); return; }
+  if(uids.length===0){ showToast('❌ أضف UID واحد على الأقل', true); return; }
   showToast(`⏳ جاري إرسال ${item.name}...`);
-  try {
+  try{
     const res = await fetch(API_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ team_code: teamCode, uids: uids, emote_id: item.Id })
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ team_code: teamCode, uids, emote_id: item.Id })
     });
     const data = await res.json();
     if(data.success) showToast(`✅ ${data.message}`);
     else showToast(`❌ فشل: ${data.message}`, true);
-  } catch(e) { showToast("❌ خطأ في الاتصال بالبوت", true); }
+  } catch(e){ showToast('❌ خطأ في الاتصال', true); }
 }
 
-document.getElementById("addUidBtn").onclick = () => {
-  const container = document.getElementById("uidsContainer");
-  const newInput = document.createElement("input");
-  newInput.type = "text";
-  newInput.className = "uid-input";
-  newInput.placeholder = "UID";
+document.getElementById('addUidBtn').onclick = () => {
+  const container = document.getElementById('uidsContainer');
+  const newInput = document.createElement('input');
+  newInput.type = 'text';
+  newInput.className = 'uid-input';
+  newInput.placeholder = 'UID';
   container.appendChild(newInput);
 };
 
-const modal = document.getElementById("itemModal");
-const modalIcon = document.getElementById("modalIcon");
-const modalName = document.getElementById("modalName");
-const modalId = document.getElementById("modalId");
-document.querySelector(".close").onclick = () => { modal.style.display = "none"; document.body.style.overflow = "auto"; };
-window.onclick = e => { if(e.target === modal) { modal.style.display = "none"; document.body.style.overflow = "auto"; } if(!e.target.closest('.dropdown')) document.getElementById("obDropdown").style.display = "none"; };
-window.addEventListener("load", fetchData);
-let searchTimeout;
-document.getElementById("searchBox").addEventListener("input", () => {
-  clearTimeout(searchTimeout);
-  searchTimeout = setTimeout(() => { currentPage = 1; renderItems(); }, 300);
+document.getElementById('searchBox').addEventListener('input', ()=>{
+  currentPage=1; renderItems();
 });
+
+fetchData();
 </script>
 </body>
 </html>
 """
 
+# ================== دوال خادم الويب ==================
 async def handle_root(request):
     return web.Response(text=HTML_PAGE, content_type='text/html')
 
 async def handle_item_data(request):
     try:
-        with urllib.request.urlopen(ITEM_DATA_URL, timeout=10) as f:
-            data = json.load(f)
-        return web.json_response(data)
-    except Exception as e:
-        return web.json_response([], status=500)
-
-async def handle_emote_image(request):
-    image_id = request.match_info.get('id')
-    if not image_id:
-        return web.Response(status=404)
-    image_url = f"https://raw.githubusercontent.com/4737647734/Emote/main/emote_image/{image_id}.png"
-    try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(image_url) as resp:
+            async with session.get(ITEM_DATA_URL) as resp:
                 if resp.status == 200:
-                    img_data = await resp.read()
-                    return web.Response(body=img_data, content_type='image/png')
-                else:
-                    return web.Response(status=404)
-    except Exception:
-        return web.Response(status=404)
+                    data = await resp.json()
+                    return web.json_response(data)
+    except:
+        pass
+    return web.json_response([])
 
 async def handle_send_emote(request):
     try:
@@ -905,54 +686,48 @@ async def handle_send_emote(request):
         emote_id = data.get("emote_id")
         if not team_code or not uids or not emote_id:
             return web.json_response({"success": False, "message": "Missing parameters"})
-        try:
-            emote_id = int(emote_id)
-            uids = [int(uid) for uid in uids]
-        except:
-            return web.json_response({"success": False, "message": "Invalid UID or Emote ID"})
-        success, msg = await cmd_dance(team_code, uids, emote_id)
+        success, msg = await cmd_dance(team_code, uids, int(emote_id))
         return web.json_response({"success": success, "message": msg})
     except Exception as e:
         return web.json_response({"success": False, "message": str(e)})
 
+# ================== بوت التلغرام ==================
 dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
-    await message.reply(
-        "XcTxTeaM EeMoT Bot\n\nUse /dance [emote_id or name] [team_code] [UID1 UID2 ...]\nExample: /dance 909000045 ABC123 12345678"
-    )
+    await message.reply("👋 XcTxTeaM EeMoT Bot\nاستخدم /dance [رقم_الإيموجي أو اسمه] [كود_الفريق] [UID1 UID2 ...]")
 
 @dp.message(Command("dance"))
 async def dance_handler(message: Message):
     parts = message.text.split()
     if len(parts) < 4:
-        await message.reply("Usage: /dance [emote_id or name] [team_code] [UIDs]")
+        await message.reply("مثال: /dance 909000045 ABC123 12345678")
         return
     emote_input = parts[1]
-    emote_id = None
+    # محاولة تحويل إلى int أو البحث بالاسم
     if emote_input.isdigit():
         emote_id = int(emote_input)
     else:
-        emote_id = NAME_TO_ID.get(emote_input.lower())
+        # البحث في ALL_EMOTE (تم تحميله مسبقاً)
+        emote_id = ALL_EMOTE.get(emote_input.lower())
         if not emote_id:
-            await message.reply(f"Emote '{emote_input}' not found")
+            await message.reply(f"❌ الإيموجي '{emote_input}' غير موجود")
             return
     team = parts[2]
     uids = [p for p in parts[3:] if p.isdigit()]
     if not uids:
-        await message.reply("No valid UIDs provided")
+        await message.reply("❌ لم يتم إدخال UIDs صحيحة")
         return
-    msg = await message.reply("Sending emote...")
+    msg = await message.reply("💃 جاري الأداء...")
     success, result = await cmd_dance(team, uids, emote_id)
-    if success:
-        await msg.edit_text(f"✅ {result}")
-    else:
-        await msg.edit_text(f"❌ Failed: {result}")
+    await msg.edit_text(f"{'✅' if success else '❌'} {result}")
 
+# ================== التشغيل الرئيسي ==================
 async def main():
+    await load_emotes()
     if not await login_to_freefire():
-        logging.warning("Initial login failed, retrying every 60s")
+        logging.warning("فشل تسجيل الدخول الأولي، سيتم إعادة المحاولة كل 60 ثانية")
         while not is_logged_in:
             await asyncio.sleep(60)
             await login_to_freefire()
@@ -962,13 +737,12 @@ async def main():
     app = web.Application()
     app.router.add_get("/", handle_root)
     app.router.add_get("/itemData.json", handle_item_data)
-    app.router.add_get("/emote_image/{id}.png", handle_emote_image)
     app.router.add_post("/send_emote", handle_send_emote)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WEB_PORT)
     await site.start()
-    logging.info(f"Website and API running on port {WEB_PORT}")
+    logging.info(f"🚀 Website and API running on port {WEB_PORT}")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
