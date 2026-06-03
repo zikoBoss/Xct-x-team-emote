@@ -26,13 +26,11 @@ from Pb2 import MajoRLoGinrEq_pb2, MajoRLoGinrEs_pb2, PorTs_pb2
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================== إعدادات ==================
 BOT_TOKEN = "8798038134:AAEUlmP2_75Ps7rTe7WkdOElJXpqGt5Cy9c"
 FF_UID = "4812753412"
 FF_PASSWORD = "492C6754CD1BB892C11548121956ADF254468453FA0A7A25FA6367F9DF926221"
 WEB_PORT = int(os.environ.get("PORT", 8080))
 
-# ================== تحميل الإيموجيات من itemData.json مباشرة ==================
 item_data_path = Path("itemData.json")
 if not item_data_path.exists():
     logger.error("itemData.json not found!")
@@ -40,19 +38,8 @@ if not item_data_path.exists():
 
 with open(item_data_path, "r", encoding="utf-8") as f:
     item_data_list = json.load(f)
+logger.info(f"Loaded {len(item_data_list)} emotes from itemData.json")
 
-# بناء خريطة: الرقم التسلسلي (1,2,3...) -> المعرف الكبير
-# وبنفس الوقت نبني قائمة للموقع (نفس itemData_list)
-emote_number_to_id = {}
-emote_id_to_number = {}
-for idx, item in enumerate(item_data_list, start=1):
-    idd = item["Id"]
-    emote_number_to_id[idx] = idd
-    emote_id_to_number[idd] = idx
-
-logger.info(f"Loaded {len(emote_number_to_id)} emotes from itemData.json")
-
-# ================== متغيرات الاتصال (نفس البوت الأصلي) ==================
 online_writer = None
 whisper_writer = None
 key = None
@@ -93,17 +80,17 @@ async def EncRypTMajoRLoGin(open_id, access_token):
     major_login.game_name = "free fire"
     major_login.platform_id = 1
     major_login.client_version = "1.123.1"
-    major_login.system_software = "Android OS 9 / API-28 (PQ3B.190801.10101846/G9650ZHU2ARC6)"
+    major_login.system_software = "Android OS 9 / API-28"
     major_login.system_hardware = "Handheld"
     major_login.telecom_operator = "Verizon"
     major_login.network_type = "WIFI"
     major_login.screen_width = 1920
     major_login.screen_height = 1080
     major_login.screen_dpi = "280"
-    major_login.processor_details = "ARM64 FP ASIMD AES VMH | 2865 | 4"
+    major_login.processor_details = "ARM64 FP ASIMD AES"
     major_login.memory = 3003
     major_login.gpu_renderer = "Adreno (TM) 640"
-    major_login.gpu_version = "OpenGL ES 3.1 v1.46"
+    major_login.gpu_version = "OpenGL ES 3.1"
     major_login.unique_device_id = "Google|34a7dcdf-a7d5-4cb6-8d7e-3b0e448a0c57"
     major_login.client_ip = "223.191.51.89"
     major_login.language = "en"
@@ -126,9 +113,9 @@ async def EncRypTMajoRLoGin(open_id, access_token):
     major_login.external_sdcard_avail_storage = 32992
     major_login.external_sdcard_total_storage = 36235
     major_login.login_by = 3
-    major_login.library_path = "/data/app/com.dts.freefireth-YPKM8jHEwAJlhpmhDhv5MQ==/lib/arm64"
+    major_login.library_path = "/data/app/com.dts.freefireth/lib/arm64"
     major_login.reg_avatar = 1
-    major_login.library_token = "5b892aaabd688e571f688053118a162b|/data/app/com.dts.freefireth-YPKM8jHEwAJlhpmhDhv5MQ==/base.apk"
+    major_login.library_token = "5b892aaabd688e571f688053118a162b|/base.apk"
     major_login.channel_type = 3
     major_login.cpu_type = 2
     major_login.cpu_architecture = "64"
@@ -200,11 +187,16 @@ async def xAuThSTarTuP(TarGeT, token, timestamp, key, iv):
     encrypted_account_token = token.encode().hex()
     encrypted_packet = await EnC_PacKeT(encrypted_account_token, key, iv)
     encrypted_packet_length = hex(len(encrypted_packet) // 2)[2:]
-    if uid_length == 9: headers = '0000000'
-    elif uid_length == 8: headers = '00000000'
-    elif uid_length == 10: headers = '000000'
-    elif uid_length == 7: headers = '000000000'
-    else: headers = '0000000'
+    if uid_length == 9:
+        headers = '0000000'
+    elif uid_length == 8:
+        headers = '00000000'
+    elif uid_length == 10:
+        headers = '000000'
+    elif uid_length == 7:
+        headers = '000000000'
+    else:
+        headers = '0000000'
     return f"0115{headers}{uid_hex}{encrypted_timestamp}00000{encrypted_packet_length}{encrypted_packet}"
 
 async def run_tcp_online(ip, port, auth_token):
@@ -217,7 +209,8 @@ async def run_tcp_online(ip, port, auth_token):
             await writer.drain()
             while True:
                 data = await reader.read(4096)
-                if not data: break
+                if not data:
+                    break
         except:
             await asyncio.sleep(5)
             online_writer = None
@@ -233,7 +226,8 @@ async def run_tcp_chat(ip, port, auth_token, ready, region):
             ready.set()
             while True:
                 data = await reader.read(4096)
-                if not data: break
+                if not data:
+                    break
         except:
             await asyncio.sleep(5)
             whisper_writer = None
@@ -247,10 +241,12 @@ async def login_to_freefire():
     global key, iv, region, online_writer, whisper_writer
     try:
         open_id, access_token = await GeNeRaTeAccEss(FF_UID, FF_PASSWORD)
-        if not open_id: return False
+        if not open_id:
+            return False
         payload = await EncRypTMajoRLoGin(open_id, access_token)
         response = await MajorLogin(payload)
-        if not response: return False
+        if not response:
+            return False
         login_res = await DecRypTMajoRLoGin(response)
         url = login_res.url
         region = login_res.region
@@ -261,7 +257,8 @@ async def login_to_freefire():
         timestamp = login_res.timestamp
 
         login_data = await GetLoginData(url, payload, token)
-        if not login_data: return False
+        if not login_data:
+            return False
         login_dec = await DecRypTLoGinDaTa(login_data)
 
         online_ip, online_port = login_dec.Online_IP_Port.split(":")
@@ -277,10 +274,8 @@ async def login_to_freefire():
         logger.error(f"Login failed: {e}")
         return False
 
-async def cmd_dance(team_code, uids, emote_number):
-    emote_id = emote_number_to_id.get(emote_number)
-    if not emote_id:
-        return False, f"❌ رقم الرقصة {emote_number} غير موجود"
+# ================== جوهر الرقصة (تستقبل المعرف الكبير مباشرة) ==================
+async def cmd_dance(team_code, uids, emote_id):
     try:
         p = await GenJoinSquadsPacket(team_code, key, iv)
         await SEndPacKeT(whisper_writer, online_writer, 'OnLine', p)
@@ -292,12 +287,12 @@ async def cmd_dance(team_code, uids, emote_number):
         await asyncio.sleep(1)
         p = await ExiT(None, key, iv)
         await SEndPacKeT(whisper_writer, online_writer, 'OnLine', p)
-        return True, f"✅ تم أداء الرقصة {emote_number} للأهداف: {', '.join(uids)}"
+        return True, f"✅ تم إرسال الرقصة {emote_id} إلى {len(uids)} لاعب"
     except Exception as e:
         logger.error(f"Dance error: {e}")
         return False, f"❌ فشل: {str(e)}"
 
-# ================== خادم الويب والموقع (مدمج) ==================
+# ================== واجهة HTML (مدمجة) ==================
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
@@ -391,26 +386,25 @@ HTML_PAGE = """<!DOCTYPE html>
         const start = (currentPage-1)*itemsPerPage;
         const pageItems = data.slice(start, start+itemsPerPage);
         grid.innerHTML = '';
-        pageItems.forEach((item, idx) => {
+        pageItems.forEach(item => {
             const card = document.createElement('div'); card.className='card';
             const imgSrc = `/emote_image/${item.Id}.png`;
             card.innerHTML = `<img src="${imgSrc}" onerror="this.src='https://via.placeholder.com/80?text=?'"><div class="tooltip">${item.Id}<br>${item.name}</div>`;
-            card.onclick = () => sendEmote(item, idx);
+            card.onclick = () => sendEmote(item);
             grid.appendChild(card);
         });
         updatePagination(data.length);
     }
     function updatePagination(total) { const totalPages = Math.ceil(total/itemsPerPage); const pagDiv = document.getElementById('pagination'); if(totalPages<=1){ pagDiv.innerHTML=''; return; } pagDiv.innerHTML=''; for(let i=1;i<=Math.min(totalPages,5);i++){ const btn=document.createElement('button'); btn.innerText=i; if(i===currentPage) btn.classList.add('active'); btn.onclick=()=>{ currentPage=i; renderItems(); }; pagDiv.appendChild(btn); } }
     function showToast(msg, isError=false){ const toast=document.createElement('div'); toast.className=`toast ${isError?'error':'success'}`; toast.innerText=msg; document.body.appendChild(toast); setTimeout(()=>toast.style.opacity='1',10); setTimeout(()=>{ toast.style.opacity='0'; setTimeout(()=>toast.remove(),300); },3000); }
-    async function sendEmote(item, index) {
+    async function sendEmote(item){
         const teamCode = document.getElementById('teamCode').value.trim();
         const uids = Array.from(document.querySelectorAll('.uid-input')).map(inp=>inp.value.trim()).filter(v=>v && /^\d+$/.test(v));
         if(!teamCode){ showToast('❌ أدخل كود الفريق', true); return; }
         if(uids.length===0){ showToast('❌ أضف UID واحد على الأقل', true); return; }
-        const emoteNumber = index + (currentPage-1)*itemsPerPage + 1;
         showToast(`⏳ جاري إرسال ${item.name}...`);
         try{
-            const res = await fetch(API_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ team_code: teamCode, uids, emote_number: emoteNumber }) });
+            const res = await fetch(API_URL, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ team_code: teamCode, uids, emote_id: item.Id }) });
             const data = await res.json();
             if(data.success) showToast(`✅ ${data.message}`);
             else showToast(`❌ فشل: ${data.message}`, true);
@@ -424,6 +418,7 @@ HTML_PAGE = """<!DOCTYPE html>
 </html>
 """
 
+# ================== نقاط نهاية الويب ==================
 async def handle_root(request):
     return web.Response(text=HTML_PAGE, content_type='text/html')
 
@@ -448,13 +443,13 @@ async def handle_send_emote(request):
         data = await request.json()
         team_code = data.get("team_code")
         uids = data.get("uids", [])
-        emote_number = data.get("emote_number")
-        if not team_code or not uids or not emote_number:
+        emote_id = data.get("emote_id")
+        if not team_code or not uids or not emote_id:
             return web.json_response({"success": False, "message": "بيانات ناقصة"})
-        success, msg = await cmd_dance(team_code, uids, int(emote_number))
+        success, msg = await cmd_dance(team_code, uids, int(emote_id))
         return web.json_response({"success": success, "message": msg})
     except Exception as e:
-        logger.error(f"Error in send_emote: {e}")
+        logger.error(f"Send emote error: {e}")
         return web.json_response({"success": False, "message": str(e)})
 
 # ================== بوت التلغرام ==================
@@ -463,11 +458,11 @@ dp = Dispatcher()
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
     await message.reply(
-        "👋 **بوت الرقص المنفصل**\n\n"
-        "الاستخدام:\n"
-        "`/dance [رقم_الرقصة] [كود_الفريق] [UID1] [UID2] ...`\n\n"
+        "👋 **XcTxTeaM EeMoT Bot**\n\n"
+        "استخدم الأمر:\n"
+        "`/dance [معرف_الإيموجي] [كود_الفريق] [UID1 UID2 ...]`\n\n"
         "مثال:\n"
-        "`/dance 5 ABC123 12345678 87654321`",
+        "`/dance 909000045 ABC123 12345678`",
         parse_mode="Markdown"
     )
 
@@ -475,32 +470,28 @@ async def start_cmd(message: Message):
 async def dance_handler(message: Message):
     parts = message.text.split()
     if len(parts) < 4:
-        await message.reply("❌ استخدم: `/dance [رقم_الرقصة] [كود_الفريق] [UID1] [UID2] ...`")
+        await message.reply("❌ استخدم: /dance [معرف_الإيموجي] [كود_الفريق] [UIDs]")
         return
     try:
-        emote = int(parts[1])
+        emote_id = int(parts[1])
     except:
-        await message.reply("❌ رقم الرقصة غير صحيح")
+        await message.reply("❌ معرف الإيموجي غير صحيح")
         return
     team = parts[2]
     uids = [p for p in parts[3:] if p.isdigit()]
     if not uids:
-        await message.reply("❌ لم يتم تحديد أي UID صحيح")
+        await message.reply("❌ لم يتم إدخال UIDs")
         return
     msg = await message.reply("💃 جاري أداء الرقصة...")
-    success, result = await cmd_dance(team, uids, emote)
+    success, result = await cmd_dance(team, uids, emote_id)
     await msg.edit_text(result)
 
 # ================== التشغيل الرئيسي ==================
 async def main():
-    logger.info("🚀 جاري تسجيل الدخول إلى Free Fire...")
     if not await login_to_freefire():
-        logger.error("❌ فشل الاتصال، سيتم إعادة المحاولة كل 30 ثانية")
-        while True:
-            await asyncio.sleep(30)
-            if await login_to_freefire():
-                break
-    logger.info("✅ متصل. البوت يعمل...")
+        logger.error("Failed to login to Free Fire")
+        return
+    logger.info("✅ Connected to Free Fire")
 
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     asyncio.create_task(dp.start_polling(bot))
@@ -514,7 +505,7 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WEB_PORT)
     await site.start()
-    logger.info(f"🌐 الموقع متاح على المنفذ {WEB_PORT}")
+    logger.info(f"🌐 Website available at port {WEB_PORT}")
 
     await asyncio.Event().wait()
 
