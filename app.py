@@ -4,14 +4,13 @@
 import asyncio
 import json
 import os
-import sys
 import ssl
 import logging
-import urllib.request
 from datetime import datetime
-from aiohttp import web
-import aiohttp
+from typing import List, Tuple
 
+import aiohttp
+from aiohttp import web
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import Message
@@ -24,13 +23,19 @@ from xC4 import (
 
 from Pb2 import MajoRLoGinrEq_pb2, MajoRLoGinrEs_pb2, PorTs_pb2
 
-logging.basicConfig(level=logging.INFO)
+# ================== إعدادات التسجيل ==================
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-# ================== بيانات الحساسة (ضعها هنا للتجربة) ==================
+# ================== بيانات الحساسة (يمكن وضعها في متغيرات البيئة لاحقاً) ==================
 BOT_TOKEN = "8798038134:AAEUlmP2_75Ps7rTe7WkdOElJXpqGt5Cy9c"
 FF_UID = "4812753412"
 FF_PASSWORD = "492C6754CD1BB892C11548121956ADF254468453FA0A7A25FA6367F9DF926221"
 WEB_PORT = int(os.environ.get("PORT", 8080))
+BASE_URL = os.environ.get("BASE_URL", "https://raw.githubusercontent.com/4737647734/Emote/main")
 
 # ================== متغيرات الاتصال ==================
 online_writer = None
@@ -40,32 +45,33 @@ iv = None
 region = None
 is_logged_in = False
 login_lock = asyncio.Lock()
+login_retry_task = None
 
-# ================== تحميل الإيموجيات من itemData.json ==================
-ITEM_DATA_URL = "https://raw.githubusercontent.com/4737647734/Emote/main/itemData.json"
-ALL_EMOTE = {}  # {id: name} أو العكس؟ سنبني خريطة رقم الرقصة (المستخدم) -> id
-# في الموقع سنستخدم id مباشرة، وللبوت سنسمح باستخدام id أو الاسم.
+# ================== تحميل الإيموجيات ==================
+ITEM_DATA_URL = f"{BASE_URL}/itemData.json"
+name_to_id = {}
+id_to_name = {}
 
-# تحميل البيانات
 async def load_emotes():
-    global ALL_EMOTE
+    """تحميل بيانات الإيموجيات من GitHub"""
+    global name_to_id, id_to_name
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(ITEM_DATA_URL) as resp:
+            async with session.get(ITEM_DATA_URL, timeout=10) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    # نبني قاموس {id: name} وللبوت سنبني أيضاً من الاسم إلى id
-                    name_to_id = {}
                     for item in data:
-                        name_to_id[item["name"].lower()] = item["Id"]
-                    ALL_EMOTE = name_to_id
-                    logging.info(f"Loaded {len(data)} emotes")
+                        idd = item["Id"]
+                        name = item["name"].lower()
+                        name_to_id[name] = idd
+                        id_to_name[idd] = name
+                    logger.info(f"✅ تم تحميل {len(data)} إيموجي")
                 else:
-                    logging.error("Failed to load itemData.json")
+                    logger.error("❌ فشل تحميل itemData.json")
     except Exception as e:
-        logging.error(f"Error loading emotes: {e}")
+        logger.error(f"⚠️ خطأ في تحميل الإيموجيات: {e}")
 
-# ================== دوال تسجيل الدخول (من الكود الأصلي) ==================
+# ================== دوال تسجيل الدخول ==================
 async def GeNeRaTeAccEss(uid, password):
     url = "https://100067.connect.garena.com/oauth/guest/token/grant"
     headers = {
@@ -82,9 +88,10 @@ async def GeNeRaTeAccEss(uid, password):
     }
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, data=data) as resp:
-            if resp.status != 200: return None, None
+            if resp.status != 200:
+                return None, None
             data = await resp.json()
-            return (data.get("open_id"), data.get("access_token"))
+            return data.get("open_id"), data.get("access_token")
 
 async def encrypted_proto(encoded_hex):
     from Crypto.Cipher import AES
@@ -98,17 +105,17 @@ async def EncRypTMajoRLoGin(open_id, access_token):
     major_login.game_name = "free fire"
     major_login.platform_id = 1
     major_login.client_version = "1.123.1"
-    major_login.system_software = "Android OS 9 / API-28 (PQ3B.190801.10101846/G9650ZHU2ARC6)"
+    major_login.system_software = "Android OS 9 / API-28"
     major_login.system_hardware = "Handheld"
     major_login.telecom_operator = "Verizon"
     major_login.network_type = "WIFI"
     major_login.screen_width = 1920
     major_login.screen_height = 1080
     major_login.screen_dpi = "280"
-    major_login.processor_details = "ARM64 FP ASIMD AES VMH | 2865 | 4"
+    major_login.processor_details = "ARM64 FP ASIMD AES"
     major_login.memory = 3003
     major_login.gpu_renderer = "Adreno (TM) 640"
-    major_login.gpu_version = "OpenGL ES 3.1 v1.46"
+    major_login.gpu_version = "OpenGL ES 3.1"
     major_login.unique_device_id = "Google|34a7dcdf-a7d5-4cb6-8d7e-3b0e448a0c57"
     major_login.client_ip = "223.191.51.89"
     major_login.language = "en"
@@ -131,9 +138,9 @@ async def EncRypTMajoRLoGin(open_id, access_token):
     major_login.external_sdcard_avail_storage = 32992
     major_login.external_sdcard_total_storage = 36235
     major_login.login_by = 3
-    major_login.library_path = "/data/app/com.dts.freefireth-YPKM8jHEwAJlhpmhDhv5MQ==/lib/arm64"
+    major_login.library_path = "/data/app/com.dts.freefireth/lib/arm64"
     major_login.reg_avatar = 1
-    major_login.library_token = "5b892aaabd688e571f688053118a162b|/data/app/com.dts.freefireth-YPKM8jHEwAJlhpmhDhv5MQ==/base.apk"
+    major_login.library_token = "5b892aaabd688e571f688053118a162b|/base.apk"
     major_login.channel_type = 3
     major_login.cpu_type = 2
     major_login.cpu_architecture = "64"
@@ -198,8 +205,8 @@ async def DecRypTLoGinDaTa(data):
     proto.ParseFromString(data)
     return proto
 
-async def xAuThSTarTuP(TarGeT, token, timestamp, key, iv):
-    uid_hex = hex(TarGeT)[2:]
+async def xAuThSTarTuP(target, token, timestamp, key, iv):
+    uid_hex = hex(target)[2:]
     uid_length = len(uid_hex)
     encrypted_timestamp = await DecodE_HeX(timestamp)
     encrypted_account_token = token.encode().hex()
@@ -222,8 +229,10 @@ async def run_tcp_online(ip, port, auth_token):
             await writer.drain()
             while True:
                 data = await reader.read(4096)
-                if not data: break
-        except:
+                if not data:
+                    break
+        except Exception as e:
+            logger.error(f"TCP Online error: {e}")
             await asyncio.sleep(5)
             online_writer = None
 
@@ -238,25 +247,36 @@ async def run_tcp_chat(ip, port, auth_token, ready, region):
             ready.set()
             while True:
                 data = await reader.read(4096)
-                if not data: break
-        except:
+                if not data:
+                    break
+        except Exception as e:
+            logger.error(f"TCP Chat error: {e}")
             await asyncio.sleep(5)
             whisper_writer = None
 
-async def SEndPacKeT(whisper_writer, online_writer, typE, packet):
+async def SEndPacKeT(typE, packet):
+    global online_writer, whisper_writer
     if typE == 'OnLine' and online_writer:
         online_writer.write(packet)
         await online_writer.drain()
+    elif typE == 'Whisper' and whisper_writer:
+        whisper_writer.write(packet)
+        await whisper_writer.drain()
 
 async def login_to_freefire():
     global key, iv, region, online_writer, whisper_writer, is_logged_in
     async with login_lock:
         try:
+            logger.info("🔄 جاري تسجيل الدخول إلى Free Fire...")
             open_id, access_token = await GeNeRaTeAccEss(FF_UID, FF_PASSWORD)
-            if not open_id: return False
+            if not open_id:
+                logger.error("❌ فشل الحصول على open_id")
+                return False
             payload = await EncRypTMajoRLoGin(open_id, access_token)
             response = await MajorLogin(payload)
-            if not response: return False
+            if not response:
+                logger.error("❌ فشل MajorLogin")
+                return False
             login_res = await DecRypTMajoRLoGin(response)
             url = login_res.url
             region = login_res.region
@@ -267,7 +287,9 @@ async def login_to_freefire():
             timestamp = login_res.timestamp
 
             login_data = await GetLoginData(url, payload, token)
-            if not login_data: return False
+            if not login_data:
+                logger.error("❌ فشل GetLoginData")
+                return False
             login_dec = await DecRypTLoGinDaTa(login_data)
 
             online_ip, online_port = login_dec.Online_IP_Port.split(":")
@@ -279,385 +301,455 @@ async def login_to_freefire():
             asyncio.create_task(run_tcp_online(online_ip, int(online_port), auth_token))
             await asyncio.wait_for(ready.wait(), timeout=15)
             is_logged_in = True
-            logging.info("✅ Logged into Free Fire")
+            logger.info("✅ تم تسجيل الدخول بنجاح إلى Free Fire")
             return True
         except Exception as e:
-            logging.error(f"Login failed: {e}")
+            logger.error(f"❌ فشل تسجيل الدخول: {e}")
             is_logged_in = False
             return False
 
-async def cmd_dance(team_code, uids, emote_id):
+async def cmd_dance(team_code: str, uids: List[str], emote_id: int) -> Tuple[bool, str]:
+    """إرسال إيموجي إلى قائمة من اللاعبين"""
     global is_logged_in, online_writer, whisper_writer, key, iv, region
     if not is_logged_in or online_writer is None:
-        return False, "Bot not connected to Free Fire"
+        return False, "البوت غير متصل باللعبة"
     try:
+        # دخول الفريق
         p = await GenJoinSquadsPacket(team_code, key, iv)
-        await SEndPacKeT(whisper_writer, online_writer, 'OnLine', p)
+        await SEndPacKeT('OnLine', p)
         await asyncio.sleep(1.5)
+        
+        # إرسال الإيموجي لكل لاعب
         for uid in uids:
             p = await Emote_k(int(uid), int(emote_id), key, iv, region)
-            await SEndPacKeT(whisper_writer, online_writer, 'OnLine', p)
+            await SEndPacKeT('OnLine', p)
             await asyncio.sleep(0.4)
+        
+        # الخروج من الفريق
         await asyncio.sleep(1)
         p = await ExiT(None, key, iv)
-        await SEndPacKeT(whisper_writer, online_writer, 'OnLine', p)
-        return True, f"Emote {emote_id} sent to {len(uids)} player(s)"
+        await SEndPacKeT('OnLine', p)
+        
+        return True, f"✅ تم إرسال الإيموجي {emote_id} إلى {len(uids)} لاعب"
     except Exception as e:
-        logging.error(f"Dance error: {e}")
-        return False, str(e)
+        logger.error(f"خطأ في cmd_dance: {e}")
+        return False, f"❌ فشل الإرسال: {str(e)}"
 
 async def periodic_relogin():
+    """إعادة تسجيل الدخول كل ساعة للحفاظ على الاتصال"""
     while True:
         await asyncio.sleep(3600)
-        logging.info("Periodic re-login...")
+        logger.info("🔄 إعادة تسجيل الدخول الدورية...")
         await login_to_freefire()
 
-# ================== واجهة الموقع المدمجة (HTML/CSS/JS) ==================
+async def keep_alive():
+    """فحص الاتصال وإعادة المحاولة إذا انقطع"""
+    global is_logged_in
+    while True:
+        await asyncio.sleep(30)
+        if not is_logged_in or online_writer is None:
+            logger.warning("⚠️ الاتصال مقطوع، جاري إعادة الاتصال...")
+            await login_to_freefire()
+
+# ================== واجهة الموقع المدمجة ==================
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>XcTxTeaM EeMoT | مكتبة الإيموجيات</title>
-<style>
-:root {
-  --primary: #ffffff;
-  --bg-dark: #000000;
-  --bg-card: #111111;
-  --bg-card-hover: #1c1c1c;
-  --text-light: #f5f5f5;
-  --text-muted: #999999;
-  --border-radius: 16px;
-  --transition: all 0.3s ease;
-  --glass-bg: rgba(15,15,15,0.85);
-  --glass-border: rgba(255,255,255,0.1);
-}
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  font-family: 'Segoe UI', system-ui, sans-serif;
-  background: var(--bg-dark);
-  color: var(--text-light);
-  direction: rtl;
-}
-header {
-  background: var(--glass-bg);
-  backdrop-filter: blur(12px);
-  padding: 16px 20px;
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  border-bottom: 1px solid var(--glass-border);
-}
-.header-left h1 {
-  font-size: 24px;
-  background: linear-gradient(135deg, #fff, #888);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-.input-panel {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  background: var(--glass-bg);
-  backdrop-filter: blur(8px);
-  padding: 20px;
-  margin: 20px;
-  border-radius: var(--border-radius);
-  border: 1px solid var(--glass-border);
-  justify-content: center;
-}
-.input-group {
-  flex: 1;
-  min-width: 150px;
-}
-.input-group label {
-  font-size: 12px;
-  color: var(--text-muted);
-  display: block;
-  margin-bottom: 6px;
-}
-.input-group input, .uid-input {
-  width: 100%;
-  background: rgba(0,0,0,0.6);
-  border: 1px solid var(--glass-border);
-  padding: 10px 12px;
-  border-radius: 12px;
-  color: white;
-  font-size: 14px;
-}
-.uids-container {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-.uid-input { flex: 1; min-width: 100px; }
-.add-uid-btn {
-  background: linear-gradient(135deg, #fff, #888);
-  border: none;
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  font-size: 22px;
-  cursor: pointer;
-  font-weight: bold;
-  color: black;
-}
-.filters { text-align: center; margin: 20px; }
-.filters input {
-  width: 80%;
-  max-width: 500px;
-  padding: 12px 20px;
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  border-radius: 40px;
-  color: white;
-  font-size: 16px;
-}
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 16px;
-  padding: 0 20px 40px;
-  max-height: 60vh;
-  overflow-y: auto;
-}
-.card {
-  background: var(--bg-card);
-  border-radius: 16px;
-  padding: 12px;
-  text-align: center;
-  cursor: pointer;
-  transition: var(--transition);
-  border: 1px solid var(--glass-border);
-}
-.card:hover { background: var(--bg-card-hover); transform: translateY(-5px); }
-.card img {
-  max-width: 80px;
-  height: auto;
-  border-radius: 12px;
-}
-.tooltip { font-size: 12px; color: var(--text-muted); margin-top: 8px; word-break: break-all; }
-.pagination {
-  display: flex;
-  justify-content: center;
-  gap: 8px;
-  margin: 20px;
-}
-.pagination button {
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  padding: 8px 14px;
-  border-radius: 12px;
-  color: white;
-  cursor: pointer;
-}
-.pagination button.active { background: linear-gradient(135deg, #fff, #888); color: black; }
-footer { text-align: center; padding: 20px; border-top: 1px solid var(--glass-border); color: gray; font-size: 13px; }
-footer a { color: #fff; text-decoration: none; }
-.toast {
-  position: fixed;
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  background: #222;
-  color: white;
-  padding: 10px 20px;
-  border-radius: 40px;
-  z-index: 2000;
-  opacity: 0;
-  transition: opacity 0.3s;
-  pointer-events: none;
-}
-.toast.success { background: #2e7d32; }
-.toast.error { background: #c62828; }
-.modal {
-  display: none;
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background: rgba(0,0,0,0.9);
-  backdrop-filter: blur(12px);
-  justify-content: center;
-  align-items: center;
-  z-index: 3000;
-}
-.modal-content {
-  background: #111;
-  padding: 20px;
-  border-radius: 24px;
-  text-align: center;
-  max-width: 300px;
-  width: 90%;
-}
-.modal-content img { max-width: 150px; margin-bottom: 10px; }
-.close {
-  float: right;
-  font-size: 28px;
-  cursor: pointer;
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>XcTxTeaM EeMoT | مكتبة الإيموجيات</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background: radial-gradient(circle at 20% 20%, #0a0a0a, #000000);
+            color: #fff;
+            min-height: 100vh;
+            direction: rtl;
+        }
+        /* شريط التمرير المخصص */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #1a1a1a; }
+        ::-webkit-scrollbar-thumb { background: #555; border-radius: 10px; }
+        /* الهيدر */
+        header {
+            background: rgba(10,10,10,0.8);
+            backdrop-filter: blur(12px);
+            padding: 15px 20px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .header-left h1 {
+            font-size: 1.8rem;
+            background: linear-gradient(135deg, #fff, #aaa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+        }
+        /* لوحة الإدخال */
+        .input-panel {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            background: rgba(20,20,20,0.6);
+            backdrop-filter: blur(8px);
+            margin: 20px;
+            padding: 20px;
+            border-radius: 24px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .input-group {
+            flex: 1;
+            min-width: 160px;
+        }
+        .input-group label {
+            display: block;
+            font-size: 12px;
+            color: #aaa;
+            margin-bottom: 6px;
+        }
+        .input-group input, .uid-input {
+            width: 100%;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            padding: 12px 14px;
+            border-radius: 16px;
+            color: white;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+        .input-group input:focus, .uid-input:focus {
+            outline: none;
+            border-color: #fff;
+            background: #222;
+        }
+        .uids-wrapper {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        #uidsContainer {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            flex: 1;
+        }
+        .uid-input { flex: 1; min-width: 100px; }
+        .add-uid-btn {
+            background: linear-gradient(135deg, #fff, #aaa);
+            border: none;
+            width: 44px;
+            height: 44px;
+            border-radius: 16px;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            color: #000;
+            transition: 0.2s;
+        }
+        .add-uid-btn:hover { transform: scale(1.02); background: #fff; }
+        /* فلتر البحث */
+        .filters { text-align: center; margin: 20px; }
+        .filters input {
+            width: 90%;
+            max-width: 500px;
+            background: #1a1a1a;
+            border: 1px solid #333;
+            padding: 14px 20px;
+            border-radius: 40px;
+            color: white;
+            font-size: 16px;
+        }
+        /* أزرار تصفية OB */
+        .ob-filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: center;
+            margin: 10px 20px 20px;
+        }
+        .ob-btn {
+            background: #222;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 30px;
+            color: #ccc;
+            font-size: 12px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        .ob-btn:hover { background: #333; color: white; }
+        .ob-btn.active { background: #fff; color: #000; font-weight: bold; }
+        /* شبكة الإيموجيات */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+            gap: 16px;
+            padding: 0 20px 40px;
+            max-height: 55vh;
+            overflow-y: auto;
+        }
+        .card {
+            background: #111;
+            border-radius: 20px;
+            padding: 16px 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            border: 1px solid #222;
+        }
+        .card:hover {
+            transform: translateY(-5px);
+            background: #1a1a1a;
+            border-color: #444;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+        }
+        .card img {
+            width: 80px;
+            height: 80px;
+            object-fit: contain;
+            border-radius: 16px;
+        }
+        .tooltip {
+            font-size: 12px;
+            color: #888;
+            margin-top: 10px;
+            word-break: break-all;
+        }
+        /* الترقيم */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            margin: 20px;
+        }
+        .pagination button {
+            background: #222;
+            border: none;
+            padding: 8px 14px;
+            border-radius: 12px;
+            color: white;
+            cursor: pointer;
+        }
+        .pagination button.active {
+            background: #fff;
+            color: black;
+            font-weight: bold;
+        }
+        footer {
+            text-align: center;
+            padding: 20px;
+            border-top: 1px solid #222;
+            font-size: 13px;
+            color: #666;
+        }
+        footer a { color: #fff; text-decoration: none; }
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #222;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 40px;
+            z-index: 2000;
+            opacity: 0;
+            transition: opacity 0.3s;
+            pointer-events: none;
+        }
+        .toast.success { background: #2e7d32; }
+        .toast.error { background: #c62828; }
+        /* مودال */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.9);
+            backdrop-filter: blur(12px);
+            justify-content: center;
+            align-items: center;
+            z-index: 3000;
+        }
+        .modal-content {
+            background: #111;
+            padding: 24px;
+            border-radius: 32px;
+            text-align: center;
+            max-width: 280px;
+            width: 90%;
+        }
+        .modal-content img { width: 120px; margin-bottom: 16px; }
+        .close {
+            float: right;
+            font-size: 28px;
+            cursor: pointer;
+        }
+        @media (max-width: 600px) {
+            .input-panel { flex-direction: column; margin: 12px; }
+            .grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
+            .card img { width: 60px; height: 60px; }
+        }
+    </style>
 </head>
 <body>
 <header><div class="header-left"><h1>𝕏𝕔𝕋𝕩𝕋𝕖𝕒𝕄 𝔼𝕖𝕄𝕠𝕋</h1></div></header>
 
 <div class="input-panel">
-  <div class="input-group">
-    <label>🏷️ Team Code</label>
-    <input type="text" id="teamCode" placeholder="مثال: ABC123">
-  </div>
-  <div class="input-group" style="flex:2">
-    <label>👥 Player UIDs</label>
-    <div style="display:flex; gap:8px; align-items:center;">
-      <div id="uidsContainer" style="display:flex; gap:8px; flex-wrap:wrap; flex:1">
-        <input type="text" class="uid-input" placeholder="UID">
-      </div>
-      <button class="add-uid-btn" id="addUidBtn">+</button>
+    <div class="input-group">
+        <label>🏷️ كود الفريق</label>
+        <input type="text" id="teamCode" placeholder="مثال: ABC123">
     </div>
-  </div>
+    <div class="input-group" style="flex:2">
+        <label>👥 معرفات اللاعبين (UID)</label>
+        <div class="uids-wrapper">
+            <div id="uidsContainer"><input type="text" class="uid-input" placeholder="UID"></div>
+            <button class="add-uid-btn" id="addUidBtn">+</button>
+        </div>
+    </div>
 </div>
 
-<div class="filters"><input type="text" id="searchBox" placeholder="🔍 بحث بالاسم أو المعرف"></div>
+<div class="filters"><input type="text" id="searchBox" placeholder="🔍 بحث بالاسم أو المعرف (مثال: 909000045)"></div>
+<div id="obFilterContainer" class="ob-filters"></div>
 <div id="itemsGrid" class="grid">جاري التحميل...</div>
 <div class="pagination" id="pagination"></div>
-<footer>XcTxTeaM EeMoT | Developed by <a href="https://t.me/ZikoB0SS" target="_blank">@ZikoB0SS</a></footer>
+<footer>XcTxTeaM EeMoT | <a href="https://t.me/ZikoB0SS" target="_blank">@ZikoB0SS</a></footer>
 
 <div id="itemModal" class="modal"><div class="modal-content"><span class="close">&times;</span><img id="modalIcon"><h3 id="modalName"></h3><p id="modalId"></p></div></div>
 
 <script>
-const API_URL = "/send_emote";
-const ITEM_DATA_URL = "/itemData.json";
-let allItems = [], currentPage = 1, itemsPerPage = 30, filteredItems = [];
+    const API_URL = "/send_emote";
+    const ITEM_DATA_URL = "/itemData.json";
+    let allItems = [], currentPage = 1, itemsPerPage = 30, filteredItems = [];
+    let activeOB = null;
 
-async function fetchData() {
-  try {
-    const res = await fetch(ITEM_DATA_URL);
-    allItems = await res.json();
-    filteredItems = [...allItems];
-    renderItems();
-    createOBFilter();
-  } catch(e) { console.error(e); }
-}
+    async function fetchData() {
+        try {
+            const res = await fetch(ITEM_DATA_URL);
+            allItems = await res.json();
+            filteredItems = [...allItems];
+            renderItems();
+            buildOBFilters();
+        } catch(e) { console.error(e); document.getElementById('itemsGrid').innerHTML = '<div style="text-align:center">خطأ في التحميل</div>'; }
+    }
 
-function createOBFilter() {
-  const versions = new Set();
-  allItems.forEach(item => {
-    let idStr = item.Id.toString();
-    if(idStr.length>=6) versions.add("OB"+idStr.substring(4,6));
-  });
-  const sorted = [...versions].sort((a,b)=>parseInt(b.slice(2))-parseInt(a.slice(2)));
-  const header = document.querySelector('header');
-  const filterDiv = document.createElement('div');
-  filterDiv.style.display = 'flex';
-  filterDiv.style.gap = '8px';
-  filterDiv.style.flexWrap = 'wrap';
-  filterDiv.style.marginTop = '10px';
-  filterDiv.style.justifyContent = 'center';
-  const allBtn = document.createElement('button');
-  allBtn.innerText = 'الكل';
-  allBtn.style.background = '#333';
-  allBtn.style.border = 'none';
-  allBtn.style.color = 'white';
-  allBtn.style.padding = '6px 12px';
-  allBtn.style.borderRadius = '20px';
-  allBtn.style.cursor = 'pointer';
-  allBtn.onclick = () => { filteredItems = [...allItems]; currentPage=1; renderItems(); };
-  filterDiv.appendChild(allBtn);
-  sorted.forEach(ob => {
-    const btn = document.createElement('button');
-    btn.innerText = ob;
-    btn.style.background = '#333';
-    btn.style.border = 'none';
-    btn.style.color = 'white';
-    btn.style.padding = '6px 12px';
-    btn.style.borderRadius = '20px';
-    btn.style.cursor = 'pointer';
-    btn.onclick = () => {
-      const code = ob.slice(2);
-      filteredItems = allItems.filter(item => item.Id.toString().startsWith("9090"+code));
-      currentPage = 1;
-      renderItems();
+    function buildOBFilters() {
+        const versions = new Set();
+        allItems.forEach(item => {
+            let idStr = item.Id.toString();
+            if(idStr.length >= 6) versions.add("OB"+idStr.substring(4,6));
+        });
+        const sorted = [...versions].sort((a,b)=>parseInt(b.slice(2))-parseInt(a.slice(2)));
+        const container = document.getElementById('obFilterContainer');
+        container.innerHTML = '<button class="ob-btn" data-ob="all">الكل</button>';
+        sorted.forEach(ob => {
+            const btn = document.createElement('button');
+            btn.className = 'ob-btn';
+            btn.innerText = ob;
+            btn.dataset.ob = ob;
+            btn.onclick = () => filterByOB(ob);
+            container.appendChild(btn);
+        });
+        document.querySelectorAll('.ob-btn').forEach(btn => {
+            if((activeOB === null && btn.dataset.ob === 'all') || (btn.dataset.ob === activeOB))
+                btn.classList.add('active');
+            else btn.classList.remove('active');
+        });
+    }
+
+    function filterByOB(ob) {
+        activeOB = (ob === 'all') ? null : ob;
+        if(activeOB) {
+            const code = activeOB.slice(2);
+            filteredItems = allItems.filter(item => item.Id.toString().startsWith("9090"+code));
+        } else {
+            filteredItems = [...allItems];
+        }
+        currentPage = 1;
+        renderItems();
+        document.querySelectorAll('.ob-btn').forEach(btn => {
+            if((activeOB === null && btn.dataset.ob === 'all') || btn.dataset.ob === activeOB)
+                btn.classList.add('active');
+            else btn.classList.remove('active');
+        });
+    }
+
+    function renderItems() {
+        const searchTerm = document.getElementById('searchBox').value.toLowerCase();
+        let data = filteredItems.filter(item => item.name.toLowerCase().includes(searchTerm) || item.Id.toString().includes(searchTerm));
+        const grid = document.getElementById('itemsGrid');
+        if(data.length === 0) { grid.innerHTML = '<div style="text-align:center">لا توجد نتائج</div>'; updatePagination(0); return; }
+        const start = (currentPage-1) * itemsPerPage;
+        const pageItems = data.slice(start, start+itemsPerPage);
+        grid.innerHTML = '';
+        pageItems.forEach(item => {
+            const card = document.createElement('div');
+            card.className = 'card';
+            const imgSrc = `https://raw.githubusercontent.com/4737647734/Emote/main/emote_image/${item.Id}.png`;
+            card.innerHTML = `<img src="${imgSrc}" onerror="this.src='https://via.placeholder.com/80?text=?'"><div class="tooltip">${item.Id}</div>`;
+            card.onclick = () => sendEmote(item);
+            grid.appendChild(card);
+        });
+        updatePagination(data.length);
+    }
+
+    function updatePagination(total) {
+        const totalPages = Math.ceil(total / itemsPerPage);
+        const pagDiv = document.getElementById('pagination');
+        if(totalPages <= 1) { pagDiv.innerHTML = ''; return; }
+        pagDiv.innerHTML = '';
+        for(let i=1; i<=Math.min(totalPages, 5); i++) {
+            const btn = document.createElement('button');
+            btn.innerText = i;
+            if(i === currentPage) btn.classList.add('active');
+            btn.onclick = () => { currentPage = i; renderItems(); };
+            pagDiv.appendChild(btn);
+        }
+    }
+
+    function showToast(msg, isError=false) {
+        const toast = document.createElement('div');
+        toast.className = `toast ${isError ? 'error' : 'success'}`;
+        toast.innerText = msg;
+        document.body.appendChild(toast);
+        setTimeout(() => toast.style.opacity = '1', 10);
+        setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => toast.remove(), 300); }, 3000);
+    }
+
+    async function sendEmote(item) {
+        const teamCode = document.getElementById('teamCode').value.trim();
+        const uids = Array.from(document.querySelectorAll('.uid-input')).map(inp => inp.value.trim()).filter(v => v && /^\d+$/.test(v));
+        if(!teamCode) { showToast('❌ أدخل كود الفريق', true); return; }
+        if(uids.length === 0) { showToast('❌ أضف UID واحد على الأقل', true); return; }
+        showToast(`⏳ جاري إرسال ${item.name}...`);
+        try {
+            const res = await fetch(API_URL, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ team_code: teamCode, uids, emote_id: item.Id })
+            });
+            const data = await res.json();
+            if(data.success) showToast(`✅ ${data.message}`);
+            else showToast(`❌ فشل: ${data.message}`, true);
+        } catch(e) { showToast('❌ خطأ في الاتصال بالبوت', true); }
+    }
+
+    document.getElementById('addUidBtn').onclick = () => {
+        const container = document.getElementById('uidsContainer');
+        const newInput = document.createElement('input');
+        newInput.type = 'text';
+        newInput.className = 'uid-input';
+        newInput.placeholder = 'UID';
+        container.appendChild(newInput);
     };
-    filterDiv.appendChild(btn);
-  });
-  header.appendChild(filterDiv);
-}
-
-function renderItems() {
-  const searchTerm = document.getElementById('searchBox').value.toLowerCase();
-  let data = filteredItems.filter(item => item.name.toLowerCase().includes(searchTerm) || item.Id.toString().includes(searchTerm));
-  const grid = document.getElementById('itemsGrid');
-  if(data.length===0){ grid.innerHTML='<div>لا توجد نتائج</div>'; updatePagination(0); return; }
-  const start = (currentPage-1)*itemsPerPage;
-  const pageItems = data.slice(start, start+itemsPerPage);
-  grid.innerHTML = '';
-  pageItems.forEach(item => {
-    const card = document.createElement('div');
-    card.className = 'card';
-    card.innerHTML = `<img src="https://raw.githubusercontent.com/4737647734/Emote/main/emote_image/${item.Id}.png" onerror="this.src='https://via.placeholder.com/80'"><div class="tooltip">${item.Id}</div>`;
-    card.onclick = () => sendEmote(item);
-    grid.appendChild(card);
-  });
-  updatePagination(data.length);
-}
-
-function updatePagination(total) {
-  const totalPages = Math.ceil(total/itemsPerPage);
-  const pagDiv = document.getElementById('pagination');
-  if(totalPages<=1){ pagDiv.innerHTML=''; return; }
-  pagDiv.innerHTML = '';
-  for(let i=1;i<=Math.min(totalPages,5);i++){
-    const btn = document.createElement('button');
-    btn.innerText = i;
-    if(i===currentPage) btn.classList.add('active');
-    btn.onclick = () => { currentPage=i; renderItems(); };
-    pagDiv.appendChild(btn);
-  }
-}
-
-function showToast(msg, isError=false){
-  const toast = document.createElement('div');
-  toast.className = `toast ${isError?'error':'success'}`;
-  toast.innerText = msg;
-  document.body.appendChild(toast);
-  setTimeout(()=>toast.style.opacity='1',10);
-  setTimeout(()=>{toast.style.opacity='0'; setTimeout(()=>toast.remove(),300);},3000);
-}
-
-async function sendEmote(item){
-  const teamCode = document.getElementById('teamCode').value.trim();
-  const uids = Array.from(document.querySelectorAll('.uid-input')).map(inp=>inp.value.trim()).filter(v=>v && /^\d+$/.test(v));
-  if(!teamCode){ showToast('❌ أدخل كود الفريق', true); return; }
-  if(uids.length===0){ showToast('❌ أضف UID واحد على الأقل', true); return; }
-  showToast(`⏳ جاري إرسال ${item.name}...`);
-  try{
-    const res = await fetch(API_URL, {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ team_code: teamCode, uids, emote_id: item.Id })
-    });
-    const data = await res.json();
-    if(data.success) showToast(`✅ ${data.message}`);
-    else showToast(`❌ فشل: ${data.message}`, true);
-  } catch(e){ showToast('❌ خطأ في الاتصال', true); }
-}
-
-document.getElementById('addUidBtn').onclick = () => {
-  const container = document.getElementById('uidsContainer');
-  const newInput = document.createElement('input');
-  newInput.type = 'text';
-  newInput.className = 'uid-input';
-  newInput.placeholder = 'UID';
-  container.appendChild(newInput);
-};
-
-document.getElementById('searchBox').addEventListener('input', ()=>{
-  currentPage=1; renderItems();
-});
-
-fetchData();
+    document.getElementById('searchBox').addEventListener('input', () => { currentPage = 1; renderItems(); });
+    fetchData();
 </script>
 </body>
 </html>
@@ -668,14 +760,15 @@ async def handle_root(request):
     return web.Response(text=HTML_PAGE, content_type='text/html')
 
 async def handle_item_data(request):
+    """إعادة بيانات الإيموجيات من GitHub مباشرة"""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get(ITEM_DATA_URL) as resp:
+            async with session.get(ITEM_DATA_URL, timeout=10) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     return web.json_response(data)
-    except:
-        pass
+    except Exception as e:
+        logger.error(f"خطأ في جلب itemData: {e}")
     return web.json_response([])
 
 async def handle_send_emote(request):
@@ -685,10 +778,11 @@ async def handle_send_emote(request):
         uids = data.get("uids", [])
         emote_id = data.get("emote_id")
         if not team_code or not uids or not emote_id:
-            return web.json_response({"success": False, "message": "Missing parameters"})
+            return web.json_response({"success": False, "message": "بيانات ناقصة"})
         success, msg = await cmd_dance(team_code, uids, int(emote_id))
         return web.json_response({"success": success, "message": msg})
     except Exception as e:
+        logger.error(f"خطأ في handle_send_emote: {e}")
         return web.json_response({"success": False, "message": str(e)})
 
 # ================== بوت التلغرام ==================
@@ -696,21 +790,28 @@ dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
-    await message.reply("👋 XcTxTeaM EeMoT Bot\nاستخدم /dance [رقم_الإيموجي أو اسمه] [كود_الفريق] [UID1 UID2 ...]")
+    await message.reply(
+        "👋 **XcTxTeaM EeMoT Bot**\n\n"
+        "أرسل /dance متبوعاً بـ:\n"
+        "`/dance [رقم الإيموجي أو اسمه] [كود الفريق] [UID1 UID2 ...]`\n\n"
+        "مثال:\n"
+        "`/dance 909000045 ABC123 12345678 87654321`\n"
+        "أو بالاسم:\n"
+        "`/dance hello ABC123 12345678`",
+        parse_mode="Markdown"
+    )
 
 @dp.message(Command("dance"))
 async def dance_handler(message: Message):
     parts = message.text.split()
     if len(parts) < 4:
-        await message.reply("مثال: /dance 909000045 ABC123 12345678")
+        await message.reply("❌ الاستخدام الصحيح:\n`/dance [معرف الإيموجي أو اسمه] [كود الفريق] [UID1 UID2 ...]`")
         return
     emote_input = parts[1]
-    # محاولة تحويل إلى int أو البحث بالاسم
     if emote_input.isdigit():
         emote_id = int(emote_input)
     else:
-        # البحث في ALL_EMOTE (تم تحميله مسبقاً)
-        emote_id = ALL_EMOTE.get(emote_input.lower())
+        emote_id = name_to_id.get(emote_input.lower())
         if not emote_id:
             await message.reply(f"❌ الإيموجي '{emote_input}' غير موجود")
             return
@@ -719,21 +820,26 @@ async def dance_handler(message: Message):
     if not uids:
         await message.reply("❌ لم يتم إدخال UIDs صحيحة")
         return
-    msg = await message.reply("💃 جاري الأداء...")
+    msg = await message.reply("💃 جاري أداء الرقصة...")
     success, result = await cmd_dance(team, uids, emote_id)
     await msg.edit_text(f"{'✅' if success else '❌'} {result}")
 
 # ================== التشغيل الرئيسي ==================
 async def main():
     await load_emotes()
+    # محاولة تسجيل الدخول مع إعادة المحاولة التلقائية
     if not await login_to_freefire():
-        logging.warning("فشل تسجيل الدخول الأولي، سيتم إعادة المحاولة كل 60 ثانية")
-        while not is_logged_in:
-            await asyncio.sleep(60)
-            await login_to_freefire()
-    asyncio.create_task(periodic_relogin())
+        logger.warning("⚠️ فشل تسجيل الدخول الأولي، سيتم إعادة المحاولة كل 30 ثانية")
+        asyncio.create_task(keep_alive())
+    else:
+        asyncio.create_task(periodic_relogin())
+        asyncio.create_task(keep_alive())
+    
+    # تشغيل بوت التلغرام
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     asyncio.create_task(dp.start_polling(bot))
+    
+    # تشغيل خادم الويب
     app = web.Application()
     app.router.add_get("/", handle_root)
     app.router.add_get("/itemData.json", handle_item_data)
@@ -742,7 +848,8 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WEB_PORT)
     await site.start()
-    logging.info(f"🚀 Website and API running on port {WEB_PORT}")
+    logger.info(f"🚀 الخادم يعمل على المنفذ {WEB_PORT}")
+    
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
