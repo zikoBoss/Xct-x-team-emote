@@ -6,6 +6,7 @@ import json
 import os
 import ssl
 import logging
+import random
 from datetime import datetime
 from typing import List, Tuple
 
@@ -16,6 +17,9 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.client.default import DefaultBotProperties
 
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+
 from xC4 import (
     GenJoinSquadsPacket, Emote_k, ExiT, GeneRaTePk, CrEaTe_ProTo,
     Ua, EnC_PacKeT, DecodE_HeX
@@ -23,21 +27,15 @@ from xC4 import (
 
 from Pb2 import MajoRLoGinrEq_pb2, MajoRLoGinrEs_pb2, PorTs_pb2
 
-# ================== إعدادات التسجيل ==================
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# ================== بيانات الحساسة (يمكن وضعها في متغيرات البيئة لاحقاً) ==================
 BOT_TOKEN = "8798038134:AAEUlmP2_75Ps7rTe7WkdOElJXpqGt5Cy9c"
 FF_UID = "4812753412"
 FF_PASSWORD = "492C6754CD1BB892C11548121956ADF254468453FA0A7A25FA6367F9DF926221"
 WEB_PORT = int(os.environ.get("PORT", 8080))
 BASE_URL = os.environ.get("BASE_URL", "https://raw.githubusercontent.com/4737647734/Emote/main")
 
-# ================== متغيرات الاتصال ==================
 online_writer = None
 whisper_writer = None
 key = None
@@ -45,33 +43,30 @@ iv = None
 region = None
 is_logged_in = False
 login_lock = asyncio.Lock()
-login_retry_task = None
 
-# ================== تحميل الإيموجيات ==================
 ITEM_DATA_URL = f"{BASE_URL}/itemData.json"
+cached_emotes = []
 name_to_id = {}
 id_to_name = {}
 
 async def load_emotes():
-    """تحميل بيانات الإيموجيات من GitHub"""
-    global name_to_id, id_to_name
+    global cached_emotes, name_to_id, id_to_name
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(ITEM_DATA_URL, timeout=10) as resp:
                 if resp.status == 200:
-                    data = await resp.json()
-                    for item in data:
+                    cached_emotes = await resp.json()
+                    for item in cached_emotes:
                         idd = item["Id"]
                         name = item["name"].lower()
                         name_to_id[name] = idd
                         id_to_name[idd] = name
-                    logger.info(f"✅ تم تحميل {len(data)} إيموجي")
+                    logger.info(f"Loaded {len(cached_emotes)} emotes")
                 else:
-                    logger.error("❌ فشل تحميل itemData.json")
+                    logger.error("Failed to fetch itemData.json")
     except Exception as e:
-        logger.error(f"⚠️ خطأ في تحميل الإيموجيات: {e}")
+        logger.error(f"Error loading emotes: {e}")
 
-# ================== دوال تسجيل الدخول ==================
 async def GeNeRaTeAccEss(uid, password):
     url = "https://100067.connect.garena.com/oauth/guest/token/grant"
     headers = {
@@ -94,8 +89,6 @@ async def GeNeRaTeAccEss(uid, password):
             return data.get("open_id"), data.get("access_token")
 
 async def encrypted_proto(encoded_hex):
-    from Crypto.Cipher import AES
-    from Crypto.Util.Padding import pad
     cipher = AES.new(b'Yg&tc%DEuh6%Zc^8', AES.MODE_CBC, b'6oyZDr22E3ychjM%')
     return cipher.encrypt(pad(encoded_hex, AES.block_size))
 
@@ -267,15 +260,15 @@ async def login_to_freefire():
     global key, iv, region, online_writer, whisper_writer, is_logged_in
     async with login_lock:
         try:
-            logger.info("🔄 جاري تسجيل الدخول إلى Free Fire...")
+            logger.info("Logging into Free Fire...")
             open_id, access_token = await GeNeRaTeAccEss(FF_UID, FF_PASSWORD)
             if not open_id:
-                logger.error("❌ فشل الحصول على open_id")
+                logger.error("Failed to get open_id")
                 return False
             payload = await EncRypTMajoRLoGin(open_id, access_token)
             response = await MajorLogin(payload)
             if not response:
-                logger.error("❌ فشل MajorLogin")
+                logger.error("MajorLogin failed")
                 return False
             login_res = await DecRypTMajoRLoGin(response)
             url = login_res.url
@@ -288,7 +281,7 @@ async def login_to_freefire():
 
             login_data = await GetLoginData(url, payload, token)
             if not login_data:
-                logger.error("❌ فشل GetLoginData")
+                logger.error("GetLoginData failed")
                 return False
             login_dec = await DecRypTLoGinDaTa(login_data)
 
@@ -301,189 +294,126 @@ async def login_to_freefire():
             asyncio.create_task(run_tcp_online(online_ip, int(online_port), auth_token))
             await asyncio.wait_for(ready.wait(), timeout=15)
             is_logged_in = True
-            logger.info("✅ تم تسجيل الدخول بنجاح إلى Free Fire")
+            logger.info("Logged into Free Fire successfully")
             return True
         except Exception as e:
-            logger.error(f"❌ فشل تسجيل الدخول: {e}")
+            logger.error(f"Login error: {e}")
             is_logged_in = False
             return False
 
 async def cmd_dance(team_code: str, uids: List[str], emote_id: int) -> Tuple[bool, str]:
-    """إرسال إيموجي إلى قائمة من اللاعبين"""
     global is_logged_in, online_writer, whisper_writer, key, iv, region
     if not is_logged_in or online_writer is None:
-        return False, "البوت غير متصل باللعبة"
+        return False, "Bot not connected to Free Fire"
     try:
-        # دخول الفريق
         p = await GenJoinSquadsPacket(team_code, key, iv)
         await SEndPacKeT('OnLine', p)
         await asyncio.sleep(1.5)
-        
-        # إرسال الإيموجي لكل لاعب
         for uid in uids:
             p = await Emote_k(int(uid), int(emote_id), key, iv, region)
             await SEndPacKeT('OnLine', p)
             await asyncio.sleep(0.4)
-        
-        # الخروج من الفريق
         await asyncio.sleep(1)
         p = await ExiT(None, key, iv)
         await SEndPacKeT('OnLine', p)
-        
-        return True, f"✅ تم إرسال الإيموجي {emote_id} إلى {len(uids)} لاعب"
+        return True, f"Emote {emote_id} sent to {len(uids)} player(s)"
     except Exception as e:
-        logger.error(f"خطأ في cmd_dance: {e}")
-        return False, f"❌ فشل الإرسال: {str(e)}"
+        logger.error(f"Dance error: {e}")
+        return False, str(e)
 
 async def periodic_relogin():
-    """إعادة تسجيل الدخول كل ساعة للحفاظ على الاتصال"""
     while True:
         await asyncio.sleep(3600)
-        logger.info("🔄 إعادة تسجيل الدخول الدورية...")
+        logger.info("Periodic re-login...")
         await login_to_freefire()
 
 async def keep_alive():
-    """فحص الاتصال وإعادة المحاولة إذا انقطع"""
-    global is_logged_in
     while True:
         await asyncio.sleep(30)
         if not is_logged_in or online_writer is None:
-            logger.warning("⚠️ الاتصال مقطوع، جاري إعادة الاتصال...")
+            logger.warning("Connection lost, reconnecting...")
             await login_to_freefire()
 
-# ================== واجهة الموقع المدمجة ==================
 HTML_PAGE = """<!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>XcTxTeaM EeMoT | مكتبة الإيموجيات</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-            background: radial-gradient(circle at 20% 20%, #0a0a0a, #000000);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #000;
             color: #fff;
-            min-height: 100vh;
             direction: rtl;
         }
-        /* شريط التمرير المخصص */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: #1a1a1a; }
-        ::-webkit-scrollbar-thumb { background: #555; border-radius: 10px; }
-        /* الهيدر */
         header {
-            background: rgba(10,10,10,0.8);
-            backdrop-filter: blur(12px);
+            background: rgba(10,10,10,0.9);
+            backdrop-filter: blur(10px);
             padding: 15px 20px;
             position: sticky;
             top: 0;
-            z-index: 100;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
+            border-bottom: 1px solid #222;
         }
-        .header-left h1 {
+        h1 {
             font-size: 1.8rem;
             background: linear-gradient(135deg, #fff, #aaa);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            letter-spacing: -0.5px;
         }
-        /* لوحة الإدخال */
         .input-panel {
             display: flex;
             flex-wrap: wrap;
             gap: 15px;
-            background: rgba(20,20,20,0.6);
-            backdrop-filter: blur(8px);
+            background: #111;
             margin: 20px;
             padding: 20px;
-            border-radius: 24px;
-            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px;
         }
-        .input-group {
-            flex: 1;
-            min-width: 160px;
-        }
-        .input-group label {
-            display: block;
-            font-size: 12px;
-            color: #aaa;
-            margin-bottom: 6px;
-        }
+        .input-group { flex: 1; min-width: 150px; }
+        .input-group label { font-size: 12px; color: #aaa; display: block; margin-bottom: 6px; }
         .input-group input, .uid-input {
             width: 100%;
             background: #1a1a1a;
             border: 1px solid #333;
-            padding: 12px 14px;
-            border-radius: 16px;
+            padding: 10px 12px;
+            border-radius: 12px;
             color: white;
-            font-size: 14px;
-            transition: all 0.2s;
         }
-        .input-group input:focus, .uid-input:focus {
-            outline: none;
-            border-color: #fff;
-            background: #222;
-        }
-        .uids-wrapper {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-        #uidsContainer {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            flex: 1;
-        }
+        .uids-wrapper { display: flex; gap: 8px; align-items: center; }
+        #uidsContainer { display: flex; flex-wrap: wrap; gap: 8px; flex: 1; }
         .uid-input { flex: 1; min-width: 100px; }
         .add-uid-btn {
-            background: linear-gradient(135deg, #fff, #aaa);
+            background: #fff;
             border: none;
-            width: 44px;
-            height: 44px;
-            border-radius: 16px;
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
             font-size: 24px;
-            font-weight: bold;
             cursor: pointer;
-            color: #000;
-            transition: 0.2s;
+            font-weight: bold;
         }
-        .add-uid-btn:hover { transform: scale(1.02); background: #fff; }
-        /* فلتر البحث */
         .filters { text-align: center; margin: 20px; }
         .filters input {
-            width: 90%;
+            width: 80%;
             max-width: 500px;
             background: #1a1a1a;
             border: 1px solid #333;
-            padding: 14px 20px;
+            padding: 12px 20px;
             border-radius: 40px;
             color: white;
-            font-size: 16px;
         }
-        /* أزرار تصفية OB */
-        .ob-filters {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            justify-content: center;
-            margin: 10px 20px 20px;
-        }
+        .ob-filters { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin: 10px 20px; }
         .ob-btn {
             background: #222;
             border: none;
             padding: 6px 14px;
             border-radius: 30px;
             color: #ccc;
-            font-size: 12px;
             cursor: pointer;
-            transition: 0.2s;
         }
-        .ob-btn:hover { background: #333; color: white; }
         .ob-btn.active { background: #fff; color: #000; font-weight: bold; }
-        /* شبكة الإيموجيات */
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
@@ -495,37 +425,21 @@ HTML_PAGE = """<!DOCTYPE html>
         .card {
             background: #111;
             border-radius: 20px;
-            padding: 16px 8px;
+            padding: 12px;
             text-align: center;
             cursor: pointer;
-            transition: all 0.25s ease;
+            transition: 0.2s;
             border: 1px solid #222;
         }
-        .card:hover {
-            transform: translateY(-5px);
-            background: #1a1a1a;
-            border-color: #444;
-            box-shadow: 0 10px 20px rgba(0,0,0,0.5);
-        }
+        .card:hover { background: #1a1a1a; transform: translateY(-3px); }
         .card img {
             width: 80px;
             height: 80px;
             object-fit: contain;
-            border-radius: 16px;
+            border-radius: 12px;
         }
-        .tooltip {
-            font-size: 12px;
-            color: #888;
-            margin-top: 10px;
-            word-break: break-all;
-        }
-        /* الترقيم */
-        .pagination {
-            display: flex;
-            justify-content: center;
-            gap: 8px;
-            margin: 20px;
-        }
+        .tooltip { font-size: 12px; color: #888; margin-top: 8px; word-break: break-all; }
+        .pagination { display: flex; justify-content: center; gap: 8px; margin: 20px; }
         .pagination button {
             background: #222;
             border: none;
@@ -534,18 +448,8 @@ HTML_PAGE = """<!DOCTYPE html>
             color: white;
             cursor: pointer;
         }
-        .pagination button.active {
-            background: #fff;
-            color: black;
-            font-weight: bold;
-        }
-        footer {
-            text-align: center;
-            padding: 20px;
-            border-top: 1px solid #222;
-            font-size: 13px;
-            color: #666;
-        }
+        .pagination button.active { background: #fff; color: black; }
+        footer { text-align: center; padding: 20px; border-top: 1px solid #222; color: #666; }
         footer a { color: #fff; text-decoration: none; }
         .toast {
             position: fixed;
@@ -563,7 +467,6 @@ HTML_PAGE = """<!DOCTYPE html>
         }
         .toast.success { background: #2e7d32; }
         .toast.error { background: #c62828; }
-        /* مودال */
         .modal {
             display: none;
             position: fixed;
@@ -583,23 +486,14 @@ HTML_PAGE = """<!DOCTYPE html>
             border-radius: 32px;
             text-align: center;
             max-width: 280px;
-            width: 90%;
         }
-        .modal-content img { width: 120px; margin-bottom: 16px; }
-        .close {
-            float: right;
-            font-size: 28px;
-            cursor: pointer;
-        }
-        @media (max-width: 600px) {
-            .input-panel { flex-direction: column; margin: 12px; }
-            .grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); }
-            .card img { width: 60px; height: 60px; }
-        }
+        .modal-content img { width: 120px; }
+        .close { float: right; font-size: 28px; cursor: pointer; }
+        @media (max-width: 600px) { .grid { grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); } }
     </style>
 </head>
 <body>
-<header><div class="header-left"><h1>𝕏𝕔𝕋𝕩𝕋𝕖𝕒𝕄 𝔼𝕖𝕄𝕠𝕋</h1></div></header>
+<header><h1>𝕏𝕔𝕋𝕩𝕋𝕖𝕒𝕄 𝔼𝕖𝕄𝕠𝕋</h1></header>
 
 <div class="input-panel">
     <div class="input-group">
@@ -615,7 +509,7 @@ HTML_PAGE = """<!DOCTYPE html>
     </div>
 </div>
 
-<div class="filters"><input type="text" id="searchBox" placeholder="🔍 بحث بالاسم أو المعرف (مثال: 909000045)"></div>
+<div class="filters"><input type="text" id="searchBox" placeholder="🔍 بحث بالاسم أو المعرف"></div>
 <div id="obFilterContainer" class="ob-filters"></div>
 <div id="itemsGrid" class="grid">جاري التحميل...</div>
 <div class="pagination" id="pagination"></div>
@@ -632,11 +526,17 @@ HTML_PAGE = """<!DOCTYPE html>
     async function fetchData() {
         try {
             const res = await fetch(ITEM_DATA_URL);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             allItems = await res.json();
+            if (!allItems.length) throw new Error('البيانات فارغة');
             filteredItems = [...allItems];
             renderItems();
             buildOBFilters();
-        } catch(e) { console.error(e); document.getElementById('itemsGrid').innerHTML = '<div style="text-align:center">خطأ في التحميل</div>'; }
+            showToast(`✅ تم تحميل ${allItems.length} إيموجي`);
+        } catch(e) {
+            console.error(e);
+            document.getElementById('itemsGrid').innerHTML = `<div style="text-align:center; padding:40px;">❌ فشل تحميل البيانات<br>${e.message}<br>تأكد من اتصال الخادم بـ GitHub</div>`;
+        }
     }
 
     function buildOBFilters() {
@@ -656,11 +556,7 @@ HTML_PAGE = """<!DOCTYPE html>
             btn.onclick = () => filterByOB(ob);
             container.appendChild(btn);
         });
-        document.querySelectorAll('.ob-btn').forEach(btn => {
-            if((activeOB === null && btn.dataset.ob === 'all') || (btn.dataset.ob === activeOB))
-                btn.classList.add('active');
-            else btn.classList.remove('active');
-        });
+        highlightActiveOB();
     }
 
     function filterByOB(ob) {
@@ -673,6 +569,10 @@ HTML_PAGE = """<!DOCTYPE html>
         }
         currentPage = 1;
         renderItems();
+        highlightActiveOB();
+    }
+
+    function highlightActiveOB() {
         document.querySelectorAll('.ob-btn').forEach(btn => {
             if((activeOB === null && btn.dataset.ob === 'all') || btn.dataset.ob === activeOB)
                 btn.classList.add('active');
@@ -685,14 +585,14 @@ HTML_PAGE = """<!DOCTYPE html>
         let data = filteredItems.filter(item => item.name.toLowerCase().includes(searchTerm) || item.Id.toString().includes(searchTerm));
         const grid = document.getElementById('itemsGrid');
         if(data.length === 0) { grid.innerHTML = '<div style="text-align:center">لا توجد نتائج</div>'; updatePagination(0); return; }
-        const start = (currentPage-1) * itemsPerPage;
+        const start = (currentPage-1)*itemsPerPage;
         const pageItems = data.slice(start, start+itemsPerPage);
         grid.innerHTML = '';
         pageItems.forEach(item => {
             const card = document.createElement('div');
             card.className = 'card';
             const imgSrc = `https://raw.githubusercontent.com/4737647734/Emote/main/emote_image/${item.Id}.png`;
-            card.innerHTML = `<img src="${imgSrc}" onerror="this.src='https://via.placeholder.com/80?text=?'"><div class="tooltip">${item.Id}</div>`;
+            card.innerHTML = `<img src="${imgSrc}" onerror="this.src='https://via.placeholder.com/80?text=?'"><div class="tooltip">${item.Id}<br>${item.name}</div>`;
             card.onclick = () => sendEmote(item);
             grid.appendChild(card);
         });
@@ -755,21 +655,11 @@ HTML_PAGE = """<!DOCTYPE html>
 </html>
 """
 
-# ================== دوال خادم الويب ==================
 async def handle_root(request):
     return web.Response(text=HTML_PAGE, content_type='text/html')
 
 async def handle_item_data(request):
-    """إعادة بيانات الإيموجيات من GitHub مباشرة"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(ITEM_DATA_URL, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return web.json_response(data)
-    except Exception as e:
-        logger.error(f"خطأ في جلب itemData: {e}")
-    return web.json_response([])
+    return web.json_response(cached_emotes)
 
 async def handle_send_emote(request):
     try:
@@ -782,22 +672,19 @@ async def handle_send_emote(request):
         success, msg = await cmd_dance(team_code, uids, int(emote_id))
         return web.json_response({"success": success, "message": msg})
     except Exception as e:
-        logger.error(f"خطأ في handle_send_emote: {e}")
+        logger.error(f"Error in handle_send_emote: {e}")
         return web.json_response({"success": False, "message": str(e)})
 
-# ================== بوت التلغرام ==================
 dp = Dispatcher()
 
 @dp.message(Command("start"))
 async def start_cmd(message: Message):
     await message.reply(
         "👋 **XcTxTeaM EeMoT Bot**\n\n"
-        "أرسل /dance متبوعاً بـ:\n"
+        "استخدم الأمر:\n"
         "`/dance [رقم الإيموجي أو اسمه] [كود الفريق] [UID1 UID2 ...]`\n\n"
         "مثال:\n"
-        "`/dance 909000045 ABC123 12345678 87654321`\n"
-        "أو بالاسم:\n"
-        "`/dance hello ABC123 12345678`",
+        "`/dance 909000045 ABC123 12345678`",
         parse_mode="Markdown"
     )
 
@@ -805,7 +692,7 @@ async def start_cmd(message: Message):
 async def dance_handler(message: Message):
     parts = message.text.split()
     if len(parts) < 4:
-        await message.reply("❌ الاستخدام الصحيح:\n`/dance [معرف الإيموجي أو اسمه] [كود الفريق] [UID1 UID2 ...]`")
+        await message.reply("❌ الاستخدام الصحيح: /dance [معرف الإيموجي] [كود الفريق] [UIDs]")
         return
     emote_input = parts[1]
     if emote_input.isdigit():
@@ -824,22 +711,18 @@ async def dance_handler(message: Message):
     success, result = await cmd_dance(team, uids, emote_id)
     await msg.edit_text(f"{'✅' if success else '❌'} {result}")
 
-# ================== التشغيل الرئيسي ==================
 async def main():
     await load_emotes()
-    # محاولة تسجيل الدخول مع إعادة المحاولة التلقائية
     if not await login_to_freefire():
-        logger.warning("⚠️ فشل تسجيل الدخول الأولي، سيتم إعادة المحاولة كل 30 ثانية")
+        logger.warning("Initial login failed, will retry...")
         asyncio.create_task(keep_alive())
     else:
         asyncio.create_task(periodic_relogin())
         asyncio.create_task(keep_alive())
-    
-    # تشغيل بوت التلغرام
+
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     asyncio.create_task(dp.start_polling(bot))
-    
-    # تشغيل خادم الويب
+
     app = web.Application()
     app.router.add_get("/", handle_root)
     app.router.add_get("/itemData.json", handle_item_data)
@@ -848,8 +731,7 @@ async def main():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", WEB_PORT)
     await site.start()
-    logger.info(f"🚀 الخادم يعمل على المنفذ {WEB_PORT}")
-    
+    logger.info(f"Server running on port {WEB_PORT}")
     await asyncio.Event().wait()
 
 if __name__ == "__main__":
